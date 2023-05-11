@@ -1,0 +1,3 @@
+# 忽略根目录下的 dist 和 node_modules 文件下
+/dist/
+/node_modules/
