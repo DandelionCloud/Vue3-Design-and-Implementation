@@ -1,9 +1,12 @@
 /**
- * 【使用 Proxy 实现对象的简单代理】
+ * 【封装 Proxy - reactive】
+ * 问题：屏蔽由原型引起的更新
  */
 
+// 用一个全局变量存储 当前被激活的 的副作用函数
 let activeEffect
 
+// effect 栈
 const effectStack = []
 
 // 注册函数
@@ -33,30 +36,58 @@ function cleanup(effectFn) {
     effectFn.deps.lenght = 0
 }
 
+// 存储副作用函数的“桶”
 const bucket = new WeakMap()
 
-const data = { foo: 1, bar: 2 }
+const ITERATE_KEY = Symbol()
+// 对原始数据的代理
+function reactive(obj) {
+    return new Proxy(obj, {
+        // 拦截读取操作
+        get(target, key, receiver) {
+            // 使得代理对象可以通过 raw 属性访问原始数据
+            if (key === 'raw') {
+                return target
+            }
+            track(target, key)
+            return Reflect(target, key, receiver)
+        },
+        // 拦截设置操作
+        set(target, key, newVal, receiver) {
+            const oldValue = target[key]
+            const type = Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
+            const res = Reflect.set(target, key, newVal, receiver)
+            // target === receiver.raw 说明 receiver 就是 target 的代理对象，仅在此时可以触发响应
+            if (target === receiver.raw) {
+                // 比较新值与旧值，只有当它们不全等，且不都是 NaN 的时候才触发响应（NaN !== NaN）
+                if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
+                    trigger(target, key, type)
+                }
+            }
+            return res
+        },
+        // 拦截 in 操作符
+        has(target, key) {
+            track(target, key)
+            return Reflect.has(target, key)
+        },
+        // 拦截 for...in 循环
+        ownKeys(target) {
+            track(target, ITERATE_KEY)
+            return Reflect.ownKeys(target)
+        },
+        // 拦截 delete 操作
+        deleteProperty(target, key) {
+            const hadKey = Object.prototype.hasOwnProperty.call(target, key)
+            const res = Reflect.deleteProperty(target, key)
+            if (res && hadKey) {
+                trigger(target, key, "DELETE")
+            }
+        }
+    })
+}
 
-const obj = new Proxy(data, {
-    // 拦截读取操作
-    get(target, key) {
-        track(target, key)
-        // 返回属性值
-        return target[key]
-    },
-    // 拦截设置操作
-    set(target, key, newVal) {
-        // 设置属性值
-        target[key] = newVal
-        trigger(target, key)
-    }
-})
-
-/**
- * track 函数：用来追踪和收集依赖
- * 1. 这是一个独立的函数，根据传入的对象 target 及其属性 key，将当前副作用函数（activeEffect）收集到 key 的依赖集合中
- * 2. 相当于在“桶” bucket 中增加一条分支，记录 target、key、activeEffect 的依赖关系
- */
+// 拦截函数 get 中调用 track() 追踪变化
 function track(target, key) {
     if (!activeEffect) return
     let depsMap = bucket.get(target)
@@ -72,10 +103,13 @@ function track(target, key) {
 }
 
 /**
- * trigger 函数：用来触发副作用函数重新执行（响应式数据发生变化时）
- * 1. 这是一个独立的函数，根据传入的对象 target 及其属性 key，从“桶”中找出 key 的依赖集合（副作用函数集合），并执行这些副作用函数
+ * 设置函数 set 中调用 trigger() 触发变化
+ * @param {*} target 目标对象
+ * @param {*} key 属性名
+ * @param {*} type 操作类型
+ * @returns 
  */
-function trigger(target, key) {
+function trigger(target, key, type) {
     const depsMap = bucket.get(target)
     if (!depsMap) { return }
     const effects = depsMap.get(key)
@@ -85,13 +119,16 @@ function trigger(target, key) {
             effectsToRun.add(effectFn)
         }
     })
-    effectsToRun.forEach(fn => {
-        if (fn.options.scheduler) {
-            fn.options.scheduler(fn)
-        } else {
-            fn()
-        }
-    })
+    // 只有当操作类型为 "ADD" 或 'DELETE' 时，才触发与 ITERATE_KEY 相关联的副作用函数重新执行
+    if (type === 'ADD' || type === 'DELETE') {
+        const iterateEffects = depsMap.get(ITERATE_KEY)
+        iterateEffects && iterateEffects.forEach(effectFn => {
+            if (effectFn !== activeEffect) {
+                effectsToRun.add(effectFn)
+            }
+        })
+    }
+    effectsToRun.forEach(fn => fn())
 }
 
 /**
@@ -246,4 +283,59 @@ function computed(getter) {
      */
     return obj
 }
+
+/**
+ * 测试 从原型上继承属性的情况
+ * 
+ */
+
+const obj = {}
+const proto = { bar: 1 }
+const child = reactive(obj)
+const parent = reactive(proto)
+// 使用 parent 作为 child 的原型
+Object.setPrototypeOf(child, parent)
+
+const equalVal = Object.getPrototypeOf(obj) === Object.getPrototypeOf(child)
+const isProto = Object.getPrototypeOf(obj) === parent
+const isProtoP = Object.getPrototypeOf(obj) === proto
+const textNode = document.createTextNode(`obj 与它的响应式数据 child 的原型${equalVal ? '' : '不'}相同${equalVal && `${isProto && '，同为响应式数据 parent'}`}，${isProtoP ? '' : "不"}是 proto`)
+document.body.append(textNode)
+
+effect(() => {
+    console.log('child.bar', child.bar)
+    return child.bar
+})
+
+setTimeout(() => {
+    child.bar++
+
+    const efs = bucket.get(obj).get('bar')
+    const efs2 = bucket.get(proto).get('bar')
+
+    console.log('efs', efs, efs2)
+}, 2000)
+
+/**
+ * 输出结果：
+ * child.bar 1 true
+ * --- 2秒后 ---
+ * child.bar 2 true
+ * child.bar 2 true
+ * 
+ * 解析：
+ * 1. 读取响应式数据的 bar 属性，child.bar 与副作用建立相应联系
+ * 2. 根据 ECMA 规范：如果对象自身不存在该属性，则会获取对象的原型并调用原型的 [[Get]] 方法得到最终结果
+ *    child.bar ===> get(): obj.bar ===> parent.bar ===> parent.bar 与副作用建立响应联系
+ *    所以，child.bar 和 parent.bar 都与副作用函数建立了响应联系
+ * 3. child.bar=2 ===> 触发代理对象 child 的 set 拦截操作 ===> Reflect.set(target, key, newVal, receiver) ===> 引擎会调用 obj 对象部署的内部方法 [[Set]]
+ *    根据规范的 10.1.9.2 节可知：如果设置的属性不存在与对象上，则会取得其原型并调用原型的 [[Set]] 方法
+ *    即代理对象 parent 的内部方法 [[Set]] ===> 触发代理对象 parent 的拦截操作
+ * 4. 所以，读取 child.bar 时，副作用被 child.bar 和 parent.bar 同时收集，修改 child.bar 时，副作用函数被触发重新执行两次
+ * 5. set(target, key, newVal, receiver){} 方法中的 target 始终是被代理的原始对象，receiver 是代理对象
+ * 6. set 拦截函数中 target 是变化的，而 receiver 则是在设置响应式数据的属性值时就确定的，且不变（检索 reflect.md 文件，查看set拦截函数中 target 与 receiver 的区别）
+ *    如：child.bar = 2 语句就固定了 receiver 是 child
+ * 7. 解决：只有当 receiver 是 target 的代理对象时才触发响应
+ *    
+ */
 

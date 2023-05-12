@@ -1,5 +1,11 @@
 /**
- * 【使用 Proxy 实现对象的简单代理】
+ * 【封装 Proxy - reactive】
+ * 问题：屏蔽由原型引起的更新
+ * 使用没有 Reflect 的方式，验证一个情况：原型的原因，导致设置响应式数据的属性值后，引起了副作用函数的多次执行。
+ * 
+ * 示例中预期结果：副作用函数应该仅在 child 代理对象的 set 拦截函数中触发响应
+ * 
+ * 示例的实际情况：副作用函数在 child 和 parent 两个代理对象的 set 拦截函数中都触发重新执行了
  */
 
 let activeEffect
@@ -35,22 +41,32 @@ function cleanup(effectFn) {
 
 const bucket = new WeakMap()
 
-const data = { foo: 1, bar: 2 }
-
-const obj = new Proxy(data, {
-    // 拦截读取操作
-    get(target, key) {
-        track(target, key)
-        // 返回属性值
-        return target[key]
-    },
-    // 拦截设置操作
-    set(target, key, newVal) {
-        // 设置属性值
-        target[key] = newVal
-        trigger(target, key)
-    }
-})
+function reactive(obj) {
+    return new Proxy(obj, {
+        // 拦截读取操作
+        get(target, key, receiver) {
+            // 使得代理对象可以通过 raw 属性访问原始数据
+            if (key === 'raw') {
+                return target
+            }
+            track(target, key)
+            return Reflect(target, key, receiver)
+        },
+        // 拦截设置操作
+        set(target, key, newVal, receiver) {
+            const oldValue = target[key]
+            const type = Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
+            const res = Reflect.set(target, key, newVal, receiver)
+            // target === receiver.raw 说明 receiver 就是 target 的代理对象，仅在此时可以触发响应
+            if (target === receiver.raw) {
+                if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
+                    trigger(target, key, type)
+                }
+            }
+            return res
+        },
+    })
+}
 
 /**
  * track 函数：用来追踪和收集依赖
@@ -246,4 +262,59 @@ function computed(getter) {
      */
     return obj
 }
+
+/**
+ * 测试 从原型上继承属性的情况
+ * 
+ */
+
+const obj = {}
+const proto = { bar: 1 }
+const child = reactive(obj)
+const parent = reactive(proto)
+// 使用 parent 作为 child 的原型
+Object.setPrototypeOf(child, parent)
+
+const equalVal = Object.getPrototypeOf(obj) === Object.getPrototypeOf(child)
+const isProto = Object.getPrototypeOf(obj) === parent
+const isProtoP = Object.getPrototypeOf(obj) === proto
+const textNode = document.createTextNode(`obj 与它的响应式数据 child 的原型${equalVal ? '' : '不'}相同${equalVal && `${isProto && '，同为响应式数据 parent'}`}，${isProtoP ? '' : "不"}是 proto`)
+document.body.append(textNode)
+
+effect(() => {
+    console.log('child.bar', child.bar)
+    return child.bar
+})
+
+setTimeout(() => {
+    child.bar++
+
+    const efs = bucket.get(obj).get('bar')
+    const efs2 = bucket.get(proto).get('bar')
+
+    console.log('efs', efs, efs2)
+}, 2000)
+
+/**
+ * 输出结果：
+ * child.bar 1 true
+ * --- 2秒后 ---
+ * child.bar 2 true
+ * child.bar 2 true
+ * 
+ * 解析：
+ * 1. 读取响应式数据的 bar 属性，child.bar 与副作用建立相应联系
+ * 2. 根据 ECMA 规范：如果对象自身不存在该属性，则会获取对象的原型并调用原型的 [[Get]] 方法得到最终结果
+ *    child.bar ===> get(): obj.bar ===> parent.bar ===> parent.bar 与副作用建立响应联系
+ *    所以，child.bar 和 parent.bar 都与副作用函数建立了响应联系
+ * 3. child.bar=2 ===> 触发代理对象 child 的 set 拦截操作 ===> Reflect.set(target, key, newVal, receiver) ===> 引擎会调用 obj 对象部署的内部方法 [[Set]]
+ *    根据规范的 10.1.9.2 节可知：如果设置的属性不存在与对象上，则会取得其原型并调用原型的 [[Set]] 方法
+ *    即代理对象 parent 的内部方法 [[Set]] ===> 触发代理对象 parent 的拦截操作
+ * 4. 所以，读取 child.bar 时，副作用被 child.bar 和 parent.bar 同时收集，修改 child.bar 时，副作用函数被触发重新执行两次
+ * 5. set(target, key, newVal, receiver){} 方法中的 target 始终是被代理的原始对象，receiver 是代理对象
+ * 6. set 拦截函数中 target 是变化的，而 receiver 则是在设置响应式数据的属性值时就确定的，且不变（检索 reflect.md 文件，查看set拦截函数中 target 与 receiver 的区别）
+ *    如：child.bar = 2 语句就固定了 receiver 是 child
+ * 7. 解决：只有当 receiver 是 target 的代理对象时才触发响应
+ *    
+ */
 
