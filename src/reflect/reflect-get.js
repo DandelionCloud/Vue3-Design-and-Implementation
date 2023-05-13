@@ -3,7 +3,7 @@
  * 解决：通过 Reflect.get 函数的第三个参数来改变函数调用中的 this
  * 1. 拦截操作中使用 Reflect.* 方法进行拦截，如 Reflect.get() 可以接受第三个参数，指明是谁在读取值，即 this
  * 
- * Reflect(target, key, receiver) 参数解释：
+ * Reflect.get(target, key, receiver) 参数解释：
  * - target：被代理的原始对象
  * - key：属性名
  * - receiver：真正读取属性的对象，即代理对象
@@ -65,7 +65,7 @@ const obj = new Proxy(data, {
     get(target, key, receiver) {
         track(target, key)
         // 使用 Reflect.get 返回读取到的属性值
-        return Reflect(target, key, receiver) 
+        return Reflect.get(target, key, receiver) 
     },
     // 拦截设置操作l
     set(target, key, newVal) {

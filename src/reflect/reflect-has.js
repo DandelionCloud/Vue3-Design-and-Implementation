@@ -59,7 +59,7 @@ const obj = new Proxy(data, {
     get(target, key, receiver) {
         track(target, key)
         // 使用 Reflect.get 返回读取到的属性值
-        return Reflect(target, key, receiver) 
+        return Reflect.get(target, key, receiver) 
     },
     // 拦截设置操作
     set(target, key, newVal) {

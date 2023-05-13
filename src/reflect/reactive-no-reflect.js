@@ -50,7 +50,7 @@ function reactive(obj) {
                 return target
             }
             track(target, key)
-            return Reflect(target, key, receiver)
+            return Reflect.get(target, key, receiver)
         },
         // 拦截设置操作
         set(target, key, newVal, receiver) {
