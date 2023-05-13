@@ -54,6 +54,7 @@ console.log(Reflect.get(obj, 'foo', { foo: 2 })) // 输出结果为 2
 回顾此前响应式数据的实现（可查看 Proxy 的使用），在 get 和 set 的拦截函数中，我们都是直接使用原始对象 target 来完成对属性的读取和拦截操作，原始对象 target 即被代理的对象 data。
 
 
+## 验证一个问题：【由原型引起的多次响应】
 ```js
 function reactive(obj) {
     return new Proxy(obj, {
@@ -70,7 +71,7 @@ Object.setPrototypeOf(child, parent)
 ```
 
 设置 child.bar 的值时，执行代理对象 child 的set 拦截函数：
-```
+```js
 // child 的 set 拦截函数
 set(target, key, newVal, receiver){
     // target: 是原始对象 obj
@@ -78,7 +79,7 @@ set(target, key, newVal, receiver){
 }
 ```
 由于 obj 上不存在 bar 属性，所以取得其原型 parent，并执行代理对象 parent 的 set 拦截函数：
-```
+```js
 // parent 的 set 拦截函数
 set(target, key, newVal, receiver){
     // target: 是原始对象 proto
@@ -89,3 +90,32 @@ set(target, key, newVal, receiver){
 发现：代理对象 parent 的 set 拦截函数中。
 
 得到 target 与 receiver 的区别：在最初设置 child.bar 的值的时候，就已经固定不论在任何情况下 receiver 是 child，而 target 是变化的。
+
+
+
+## **绝妙**-待探讨！！！：
+```js
+// 拦截读取操作
+get(target, key, receiver) {
+    // 使得代理对象可以通过 raw 属性访问原始数据
+    if (key === 'raw') {
+        return target
+    }
+    track(target, key)
+    return Reflect.get(target, key, receiver)
+},
+// 拦截设置操作
+set(target, key, newVal, receiver) {
+    const oldValue = target[key]
+    const type = Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
+    const res = Reflect.set(target, key, newVal, receiver)
+    // target === receiver.raw 说明 receiver 就是 target 的代理对象，仅在此时可以触发响应
+    if (target === receiver.raw) {
+        // 比较新值与旧值，只有当它们不全等，且不都是 NaN 的时候才触发响应（NaN !== NaN）
+        if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
+            trigger(target, key, type)
+        }
+    }
+    return res
+},
+```

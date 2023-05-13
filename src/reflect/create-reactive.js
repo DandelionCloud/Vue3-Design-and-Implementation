@@ -1,8 +1,6 @@
 /**
- * 【封装 Proxy - reactive】
- * 问题：
- * 1. 屏蔽由原型引起的更新 => 屏蔽原型对象的拦截操作
- * 2. 深层响应数据 => 将拦截方法 get 中返回结果是对象的继续用方法包装为响应式数据
+ * 【封装 Proxy - 深浅响应】
+ * 浅响应(shallowReactive)：只有对象的第一层属性是响应的。
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数
@@ -42,8 +40,10 @@ function cleanup(effectFn) {
 const bucket = new WeakMap()
 
 const ITERATE_KEY = Symbol()
+
+// 封装 createReactive 函数，接收一个参数 isShallow，代表是否为浅响应，默认为 false，即非浅响应
+function createReactive(obj, isShallow = false) {
 // 对原始数据的代理
-function reactive(obj) {
     return new Proxy(obj, {
         // 拦截读取操作
         get(target, key, receiver) {
@@ -52,13 +52,15 @@ function reactive(obj) {
                 return target
             }
             track(target, key)
-            /**
-             * 1. 得到原始值结果
-             * 2. 如果是对象类型的数据，则调用 reactive 将结果包装成响应式数据并返回
-             */
             const res = Reflect.get(target, key, receiver)
+
+            // 如果是浅响应，直接返回原始值
+            if(isShallow){
+                return res
+            }
+
             if(typeof res === 'object' && res !== null){
-                return reactive(res)
+                return createReactive(res)
             }
             return res
         },
