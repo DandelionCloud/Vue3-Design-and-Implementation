@@ -1,9 +1,16 @@
 /**
- * 【浅响应与深响应】- [ reactive 与 shallowReactive ]
+ * 【只读与浅只读】- [ readonly 与 shallowReadonly ]
  * 
- * 当前目标：实习一个 深响应 reactive
+ * 继续利用 createReactive 函数，增加一个参数 isReadonly，代表是否只读
  * 
- * 解决：在 get 拦截函数中，如果返回值是一个对象，则调用 reactive 将结果包装成响应式数据并返回
+ * 只读的要求：
+ * 1. 不可以设置对象的属性值 - set 拦截
+ * 2. 不可以删除对象的属性值 - deleteProperty 拦截
+ * 3. 不必要为只读数据建立响应联系 - get 拦截
+ * 
+ * 深只读：对象的第一层属性、第二层属性及更深层的属性都是只读的
+ * 
+ * 解决：get 拦截函数中，递归的调用 readonly 将数据包装成只读的代理对象，并将其作为返回值返回
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数
@@ -43,31 +50,46 @@ function cleanup(effectFn) {
 const bucket = new WeakMap()
 
 const ITERATE_KEY = Symbol()
-// 对原始数据的代理
-function reactive(obj) {
+
+/**
+ * 封装 createReactive 函数
+ * @param {*} obj 原始对象
+ * @param {*} isShallow 是否创建浅响应对象或浅只读对象，默认为 false，即创建深响应对象
+ * @param {*} isReadonly 是否只读，默认为 false，即非只读
+ * @returns 
+ */
+function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     // 拦截读取操作
     get(target, key, receiver) {
-      // 代理对象通过 raw 属性访问原始数据
       if (key === 'raw') {
         return target
       }
-      track(target, key)
+      // 3. 非只读时，才需要建立响应联系
+      if (!isReadonly) {
+        track(target, key)
+      }
       const res = Reflect.get(target, key, receiver)
+      if (isShallow) {
+        return res
+      }
       if (typeof res === 'object' && res !== null) {
-        // 调用 reactive 将结果包装成响应式数据并返回
-        return reactive(res)
+        return isReadonly ? createReactive(res, false, true) : reactive(res)
       }
       return res
     },
     // 拦截设置操作
     set(target, key, newVal, receiver) {
+      // 1. 只读属性不可设置，打印警告信息并返回
+      if (isReadonly) {
+        console.warn(`属性 ${key} 是只读的`)
+        return true
+      }
+
       const oldValue = target[key]
       const type = Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
       const res = Reflect.set(target, key, newVal, receiver)
-      // target === receiver.raw 表明 receiver 就是 target 的代理对象
       if (target === receiver.raw) {
-        // 比较新值与旧值，只有当它们不全等，且不都是 NaN 的时候才触发响应（NaN !== NaN）
         if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
           trigger(target, key, type)
         }
@@ -86,6 +108,11 @@ function reactive(obj) {
     },
     // 拦截 delete 操作
     deleteProperty(target, key) {
+      // 2. 只读属性不可设置，打印警告信息并返回
+      if (isReadonly) {
+        console.warn(`属性 ${key} 是只读的`)
+        return true
+      }
       const hadKey = Object.prototype.hasOwnProperty.call(target, key)
       const res = Reflect.deleteProperty(target, key)
       if (res && hadKey) {
@@ -299,28 +326,84 @@ function computed(getter) {
   return obj
 }
 
-/**
- * 测试：浅响应问题
- */
+// 创建深响应式对象
+function reactive(obj) {
+  return createReactive(obj)
+}
 
-const obj = reactive({ foo: { bar: 1 } })
+// 创建浅响应式对象
+function shallowReactive(obj) {
+  return createReactive(obj, true)
+}
+
+// 创建只读对象（浅只读）
+function shallowReadonly(obj) {
+  return createReactive(obj, true, true)
+}
+
+// 创建只读对象
+function readonly(obj) {
+  return createReactive(obj, false, true)
+}
+
+
+// 测试浅只读
+const obj = shallowReadonly({ foo: { bar: 1 }, foo2: 2 })
+
+obj.foo = { bar: 1 }  // obj.foo is readonly
+delete obj.foo2   // obj.foo2 is readonly
+obj.foo.bar = 2   // obj.foo is not readonly
 
 effect(() => {
   console.log(obj.foo.bar)
 })
 
 setTimeout(() => {
-  obj.foo.bar = 2
-  console.log('reset bar')
+  obj.foo.bar = 3
+  console.log(obj)
 }, 2000)
 
 
 /**
- * 输出结果：
- * 1
+ * 输出：（两条警告信息）
+ * 属性 foo 是只读的
+ * 属性 foo2 是只读的
  * 2
- * reset bar
- * 
- * 结果：深响应，设置 obj.foo.bar 的值时触发副作用函数重新执行
+ * --- 3秒后 ---
+   Proxy(object)
+   {
+      foo: { bar: 3 },
+      foo2: 2
+   }
+ *
+
+ * 解释：
+ * 1. 使用 shallowReadonly 创建了一个浅只读的代理对象 obj，仅第一层属性是只读的，第二层及更深层属性非只读
+ *    所以，obj.foo.bar 是非只读属性，可修改：obj.foo.bar = 2  // 设置成功
+ * 2. 只读，在 get 拦截函数中，是不建立响应联系
+ *    所以，2秒后设置 obj.foo.bar 的值，不会触发响应
+ *
+ * 结论：
+ * 1. 只读时，get 拦截中不收集依赖
+ * 2. 深层属性可设置值，不触发响应
+ *
  */
 
+
+// 测试深只读
+const obj2 = readonly({ foo: { bar: 1 }, foo2: 2 })
+obj2.foo = { bar: 2 }
+obj2.foo.bar = 2
+delete obj2.foo2
+
+effect(() => {
+  console.log(obj2.foo.bar)
+})
+
+/**
+ * 输出：
+ * 属性 foo 是只读的
+ * 属性 bar 是只读的
+ * 属性 foo2 是只读的
+ * 1
+ */
