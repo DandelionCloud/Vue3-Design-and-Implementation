@@ -1,5 +1,6 @@
 /**
- * 等同于 reflect-5-summary.js
+ * 【拦截 delete 操作】
+ * delete 拦截操作依赖内部方法 [[Delete]]，该内部方法使用 deleteProperty 拦截
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数
@@ -35,7 +36,6 @@ const bucket = new WeakMap()
 // 原始数据
 const data = {
   foo: 1,
-  foo2: NaN,
   get bar() {
     /**
      * 根据 Reflect.get(target, key, receiver) 的第三个参数指明的代理对象，
@@ -43,7 +43,7 @@ const data = {
      * 所以，读取响应式对象的属性，可以建立响应联系
      */
     return this.foo
-  },
+  }
 }
 
 const ITERATE_KEY = Symbol()
@@ -61,9 +61,8 @@ const obj = new Proxy(data, {
     return Reflect.get(target, key, receiver)
   },
   // 拦截设置操作
-  set(target, key, newVal, receiver) {
-    // 先获取旧值
-    const oldValue = target[key]
+  set(target, key, newVal) {
+    // target[key] = newVal
     /**
      * 1. 先判断该属性是新增的属性还是已有的属性：
      *  - 如果是新增属性，则改变了属性数量，会对 for...in 循环产生影响
@@ -76,10 +75,8 @@ const obj = new Proxy(data, {
       ? "SET"
       : "ADD"
     const res = Reflect.set(target, key, newVal, receiver)
-    // 1. 比较新值与旧值，只有当它们不全等，且不都是 NaN 的时候才触发响应（NaN !== NaN）
-    if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
-      trigger(target, key, type)
-    }
+    // 将 type 作为第三个参数传递给 trigger 函数
+    trigger(target, key, type)
     return res
   },
   // 拦截 in 操作符
@@ -171,8 +168,8 @@ function trigger(target, key, type) {
       })
   }
   effectsToRun.forEach((fn) => {
-    if (fn?.options?.scheduler) {
-      fn.options?.scheduler(fn)
+    if (fn.options.scheduler) {
+      fn.options.scheduler(fn)
     } else {
       fn()
     }
@@ -180,18 +177,5 @@ function trigger(target, key, type) {
 }
 
 effect(() => {
-  // console.log(obj.foo)
-  console.log(obj.foo2)
+  "foo" in obj // 将会建立依赖关系
 })
-
-setTimeout(() => {
-  // obj.foo = 1
-  obj.foo2 = NaN
-  console.log('重置')
-}, 3000)
-
-/**
- * 解释：
- * 1. set 拦截函数中增加新旧值的判断后，新旧值一致时，不触发副作用函数重新执行
- * 2. 全等判断中无法避免的 NaN 的错误：NaN !== NaN 为 true  ===>  保证新旧值不都是 NaN: oldValue === oldValue || newVal === newVal
- */

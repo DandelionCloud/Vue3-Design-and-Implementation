@@ -1,5 +1,11 @@
 /**
- * 等同于 reflect-5-summary.js
+ * 【拦截 for...in 循环】
+ * 1. 使用 ownKeys 拦截函数实现对 for...in 操作的代理
+ * 2. 使用 Symbol 类型的 ITERATE_KEY 与包含 for...in 操作的副作用函数建立联系
+ * 3. 添加新属性时(set 拦截函数内)，触发副作用函数重新执行时，将与 ITERATE_KEY 相关联的副作用函数也取出并执行
+ * 4. 修改属性不会对 for...in 循环产生影响，仅有新增时触发副作用执行
+ *  所以，当属性的操作类型为 'ADD' 时，才触发与 ITERATE_KEY 相关联的副作用函数重新执行
+ *  即：trigger 函数中增加操作类型的判断
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数
@@ -35,7 +41,6 @@ const bucket = new WeakMap()
 // 原始数据
 const data = {
   foo: 1,
-  foo2: NaN,
   get bar() {
     /**
      * 根据 Reflect.get(target, key, receiver) 的第三个参数指明的代理对象，
@@ -61,9 +66,8 @@ const obj = new Proxy(data, {
     return Reflect.get(target, key, receiver)
   },
   // 拦截设置操作
-  set(target, key, newVal, receiver) {
-    // 先获取旧值
-    const oldValue = target[key]
+  set(target, key, newVal) {
+    // target[key] = newVal
     /**
      * 1. 先判断该属性是新增的属性还是已有的属性：
      *  - 如果是新增属性，则改变了属性数量，会对 for...in 循环产生影响
@@ -76,10 +80,8 @@ const obj = new Proxy(data, {
       ? "SET"
       : "ADD"
     const res = Reflect.set(target, key, newVal, receiver)
-    // 1. 比较新值与旧值，只有当它们不全等，且不都是 NaN 的时候才触发响应（NaN !== NaN）
-    if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
-      trigger(target, key, type)
-    }
+    // 将 type 作为第三个参数传递给 trigger 函数
+    trigger(target, key, type)
     return res
   },
   // 拦截 in 操作符
@@ -96,21 +98,6 @@ const obj = new Proxy(data, {
      */
     track(target, ITERATE_KEY)
     return Reflect.ownKeys(target)
-  },
-  // 拦截 delete 操作
-  deleteProperty(target, key) {
-    /**
-     * 1. 只有当被删除的属性时对象自己的属性，且删除成功才会触发更新
-     * 2. 删除属性，会改变属性数量，对 for...in 循环产生影响
-     * 3. 所以，操作类型为 "DELETE" 时，也要触发与 ITERATE_KEY 相关联的副作用函数重新执行
-     */
-    // 检查被操作的属性是否是对象自己的属性
-    const hadKey = Object.prototype.hasOwnProperty.call(target, key)
-    const res = Reflect.deleteProperty(target, key)
-    if (res && hadKey) {
-      trigger(target, key, "DELETE")
-    }
-    return res
   },
 })
 
@@ -136,7 +123,7 @@ function track(target, key) {
  * @param {*} type 操作类型
  * @returns
  *
- * 只有当属性数量变化时，即操作类型 type 为 'ADD' 或 'DELETE' 时，才会触发与 ITERATE_KEY 相关联的副作用函数重新执行
+ * 只有当新增属性时，即操作类型 type 为 'ADD' 时，才会触发与 ITERATE_KEY 相关联的副作用函数重新执行
  */
 function trigger(target, key, type) {
   const depsMap = bucket.get(target)
@@ -160,8 +147,8 @@ function trigger(target, key, type) {
         effectsToRun.add(effectFn)
       }
     })
-  // 只有当操作类型为 "ADD" 或 'DELETE' 时，才触发与 ITERATE_KEY 相关联的副作用函数重新执行
-  if (type === "ADD" || type === "DELETE") {
+  // 只有当操作类型为 "ADD" 时，才触发与 ITERATE_KEY 相关联的副作用函数重新执行
+  if (type === "ADD") {
     const iterateEffects = depsMap.get(ITERATE_KEY)
     iterateEffects &&
       iterateEffects.forEach((effectFn) => {
@@ -171,8 +158,8 @@ function trigger(target, key, type) {
       })
   }
   effectsToRun.forEach((fn) => {
-    if (fn?.options?.scheduler) {
-      fn.options?.scheduler(fn)
+    if (fn.options.scheduler) {
+      fn.options.scheduler(fn)
     } else {
       fn()
     }
@@ -180,18 +167,5 @@ function trigger(target, key, type) {
 }
 
 effect(() => {
-  // console.log(obj.foo)
-  console.log(obj.foo2)
+  "foo" in obj // 将会建立依赖关系
 })
-
-setTimeout(() => {
-  // obj.foo = 1
-  obj.foo2 = NaN
-  console.log('重置')
-}, 3000)
-
-/**
- * 解释：
- * 1. set 拦截函数中增加新旧值的判断后，新旧值一致时，不触发副作用函数重新执行
- * 2. 全等判断中无法避免的 NaN 的错误：NaN !== NaN 为 true  ===>  保证新旧值不都是 NaN: oldValue === oldValue || newVal === newVal
- */
