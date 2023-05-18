@@ -44,7 +44,7 @@ function cleanup(effectFn) {
      * 3. 借助 JS 中对象的直接赋值具有的浅拷贝特性，将自己这个副作用函数从 bucket 中移除
      * 结论：effectFn.deps 中只收集与 effectFn 相关联的依赖集合，当从这些依赖集合中把自己移除后，就不再有与 effectFn 相关联的依赖集合了，所以要重置为空数组
      */
-    effectFn.deps.lenght = 0
+    effectFn.deps.length = 0
 }
 
 // 存储副作用函数的桶

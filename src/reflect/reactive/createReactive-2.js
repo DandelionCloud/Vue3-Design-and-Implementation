@@ -43,7 +43,7 @@ function cleanup(effectFn) {
     const deps = effectFn.deps[i]
     deps.delete(effectFn)
   }
-  effectFn.deps.lenght = 0
+  effectFn.deps.length = 0
 }
 
 // 存储副作用函数的“桶”
@@ -74,7 +74,7 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
         return res
       }
       if (typeof res === 'object' && res !== null) {
-        return isReadonly ? createReactive(res, false, true) : reactive(res)
+        return isReadonly ? readonly(res) : reactive(res)
       }
       return res
     },

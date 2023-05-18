@@ -1,9 +1,46 @@
 /**
- * 【浅响应与深响应】- [ reactive 与 shallowReactive ]
+ * 【代理数组】- 遍历数组
+ * 分析：
+ * 1. 数组是一个特殊的对象-异质对象，数组对象除了 [[DefineOwnProprerty]] 这个内部方法外，其他内部方法的逻辑都与常规对象相同
  * 
- * 当前目标：实习一个 深响应 reactive
+ * 2. 所有对数组元素或属性的“读取”操作：
+ *    - 通过索引访问数组元素值：arr[0]
+ *    - 访问数组的长度：arr.length
+ *    - 把数组作为对象，使用 for...in 循环遍历
+ *    - 使用 for...of 迭代遍历数组
+ *    - 数组的原型方法，如 concat/join/every/some/find/findIndex/includes 等，以及其他所有不改变原数组的原型方法
  * 
- * 解决：在 get 拦截函数中，如果返回值是一个对象，则调用 reactive 将结果包装成响应式数据并返回
+ * 3. 对数组元素或属性的设置操作：
+ *    - 通过索引修改数组元素值：arr[1] = 3
+ *    - 修改数组长度：arr.length = 0
+ *    - 数组的栈方法：push/pop/shift/unshift
+ *    - 修改原数组的原型方法：splice/fill/sort等
+ *  
+ * 注意：
+ * 1. 通过索引读取或设置数组元素值时，代理对象的 get/set 拦截会执行，可以正确的触发响应
+ * 2. 因为内部方法 [[DefineOwnProperty]] 的实现不同，通过索引设置数组的元素值和设置对象的属性值根本上是不同的：
+ *    通过索引设置数组元素值 ===> 执行数组对象部署的内部方法 [[Set]] ===> 依赖于 [[DefineOwnProperty]]
+ * 
+ * -------------------------------------------------------------------------------------------------------------------
+ * 
+ * 【 for...in 】：
+ * 1. 添加新元素：arr[100] = 'bar'
+ * 2. 修改数组长度：arr.length = 0
+ * 本质：修改了数组的 length 属性
+ * 结论：数组 length 属性被修改，则 for...in 循环遍历数组的结果就会改变
+ * 
+ * 【 for...of 】:
+ * 分析：
+ * 1. for...of 是用来遍历可迭代对象（iterable object）的
+ * 2. ES2015 为 JS 定了迭代协议：一个对象是否被迭代，取决于该对象或该对象的原型是否实现了 @@iterator 方法
+ * 3. @@[name] 标志：在 ECMAScript 规范里用来代指 JS 内建的 symbols 值
+ * 结论：
+ * 1. 如果一个对象实现了 Symbol.iterator 方法，则该对象就是可以迭代的
+ * 2. 数组内建了 Symbol.iterator 方法的实现
+ * 3. 数组的 values 方法的返回值其实就是数组内建的迭代器
+ *    Array.prototype.values === Array.prototype[Symbol.iterator]   // true
+ *    使用 for...of 循环、调用 values 方法    ===>    读取数组的 Symbol.iterator 属性
+ * 4. 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系   ===>  get 拦截中增加 判断 typeof key !== 'symbol'
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数
@@ -43,33 +80,55 @@ function cleanup(effectFn) {
 const bucket = new WeakMap()
 
 const ITERATE_KEY = Symbol()
-// 对原始数据的代理
-function reactive(obj) {
+
+/**
+ * 封装 createReactive 函数
+ * @param {*} obj 原始对象
+ * @param {*} isShallow 是否创建浅响应对象或浅只读对象，默认为 false，即创建深响应对象
+ * @param {*} isReadonly 是否只读，默认为 false，即非只读
+ * @returns 
+ */
+function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     // 拦截读取操作
     get(target, key, receiver) {
-      // 代理对象通过 raw 属性访问原始数据
       if (key === 'raw') {
         return target
       }
-      track(target, key)
+      /**
+       * 1. 非只读时，才需要建立响应联系
+       * 2. 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系
+       */
+      if (!isReadonly && typeof key !== 'symbol') {
+        track(target, key)
+      }
       const res = Reflect.get(target, key, receiver)
+      if (isShallow) {
+        return res
+      }
       if (typeof res === 'object' && res !== null) {
-        // 调用 reactive 将结果包装成响应式数据并返回
-        return reactive(res)
+        return isReadonly ? readonly(res) : reactive(res)
       }
       return res
     },
     // 拦截设置操作
     set(target, key, newVal, receiver) {
+      if (isReadonly) {
+        console.warn(`属性 ${key} 是只读的`)
+        return true
+      }
+
       const oldValue = target[key]
-      const type = Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
+      /**
+       * 1. 如果代理目标是数组，则检查被设置的索引值是否小于数组长度
+       * 2. 如果小于数组长度，则为设置 "SET" 操作
+       * 3. 否则，则为新增 "ADD" 操作
+       */
+      const type = Array.isArray(target) ? Number(key) < target.length ? "SET" : "ADD" : Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
       const res = Reflect.set(target, key, newVal, receiver)
-      // target === receiver.raw 表明 receiver 就是 target 的代理对象
       if (target === receiver.raw) {
-        // 比较新值与旧值，只有当它们不全等，且不都是 NaN 的时候才触发响应（NaN !== NaN）
         if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
-          trigger(target, key, type)
+          trigger(target, key, type, newVal)
         }
       }
       return res
@@ -81,11 +140,24 @@ function reactive(obj) {
     },
     // 拦截 for...in 循环
     ownKeys(target) {
-      track(target, ITERATE_KEY)
+      /**
+       * 结论：属性个数的变化会影响 foo...in 遍历的结果
+       * 常规对象：属性个数发生变化（操作类型是 ADD 或者 DELETE ）
+       * 数组对象：属性个数发生变化，即数组元素个数 length 发生变化
+       * 
+       * 1. 操作目标是数组对象，使用 length 属性作为 key 并建立响应联系
+       * 2. 操作目标是长队对象，使用 ITERATE_KEY 作为 key 建立响应联系
+       * 
+       */
+      track(target, Array.isArray(target) ? "length" : ITERATE_KEY)
       return Reflect.ownKeys(target)
     },
     // 拦截 delete 操作
     deleteProperty(target, key) {
+      if (isReadonly) {
+        console.warn(`属性 ${key} 是只读的`)
+        return true
+      }
       const hadKey = Object.prototype.hasOwnProperty.call(target, key)
       const res = Reflect.deleteProperty(target, key)
       if (res && hadKey) {
@@ -116,9 +188,10 @@ function track(target, key) {
  * @param {*} target 目标对象
  * @param {*} key 属性名
  * @param {*} type 操作类型
+ * @param {*} newVal 新值
  * @returns 
  */
-function trigger(target, key, type) {
+function trigger(target, key, type, newVal) {
   const depsMap = bucket.get(target)
   if (!depsMap) { return }
   const effects = depsMap.get(key)
@@ -134,6 +207,35 @@ function trigger(target, key, type) {
     iterateEffects && iterateEffects.forEach(effectFn => {
       if (effectFn !== activeEffect) {
         effectsToRun.add(effectFn)
+      }
+    })
+  }
+  /**
+   * 1. 操作目标是数组对象，且操作类型为 ADD
+   *    ADD ===> 新增了数组元素 ===> 隐式地改变了数组的 length 属性值
+   * 2. 取出与 length 属性相关联的副作用函数，添加到 effectsToRun 中待执行
+   */
+  if (type === 'ADD' && Array.isArray(target)) {
+    const lengthEffects = depsMap.get('length')
+    lengthEffects && lengthEffects.forEach(effectFn => {
+      if (effectFn !== activeEffect) {
+        effectsToRun.add(effectFn)
+      }
+    })
+  }
+  /**
+   * 1. 操作目标是数组对象，且修改了数组的 length 属性
+   *    修改数组的 length 属性 ===> 隐式地影响了索引大于等于 length 新值的元素
+   * 2. 对于 index >= length 的元素，取出与它们相关的副作用函数，添加到 effectsToRun 中待执行
+   */
+  if (Array.isArray(target) && key === 'length') {
+    depsMap.forEach((effects, key) => {
+      if (key >= newVal) {
+        effects.forEach(effectFn => {
+          if (effectFn !== activeEffect) {
+            effectsToRun.add(effectFn)
+          }
+        })
       }
     })
   }
@@ -299,28 +401,82 @@ function computed(getter) {
   return obj
 }
 
-/**
- * 测试：浅响应问题
- */
+// 创建深响应式对象
+function reactive(obj) {
+  return createReactive(obj)
+}
+// 创建只读对象
+function readonly(obj) {
+  return createReactive(obj, false, true)
+}
 
-const obj = reactive({ foo: { bar: 1 } })
+/* 
+// 实现一个简单的可迭代的对象：实现 Symbol.iterator 方法
+const obj = {
+  val: 0,
+  [Symbol.iterator]() {
+    return {
+      next() {
+        return {
+          value: obj.val++,
+          done: obj.val > 10 ? true : false
+        }
+      }
+    }
+  }
+}
+for (const value of obj) {
+  console.log(value)
+}
+*/
+
+/*
+// 数组内建了 Symbol.iterator 方法的实现
+const arr = [1, 2, 3, 4, 5]
+// 默认情况下数组可以用 for...of 遍历
+for (const value of arr) {
+  console.log(value)
+}
+// 数组迭代器的模拟实现
+// 迭代数组元素时，会读取数组的索引和 length 属性
+arr[Symbol.iterator] = function () {
+  const target = this
+  const len = target.length
+  let index = 0
+
+  return {
+    next() {
+      return {
+        value: index < len ? target[index] : undefined,
+        done: index++ >= len
+      }
+    }
+  }
+}
+// 获取并调用数组内建的迭代器方法
+const itr = arr[Symbol.iterator]()
+console.log(itr.next())
+console.log(itr.next())
+console.log(itr.next())
+console.log(itr.next())
+console.log(itr.next())
+console.log(itr.next())
+*/
+
+const arr = reactive([1, 2, 3, 4, 5, 6])
 
 effect(() => {
-  console.log(obj.foo.bar)
+  for (const value of arr) {
+    console.log(value)
+  }
 })
 
 setTimeout(() => {
-  obj.foo.bar = 2
-  console.log('reset bar')
+  console.log('-------------')
+  arr[1] = 'bar'
+}, 1000)
+
+setTimeout(() => {
+  console.log('-------------')
+  arr.length = 1
 }, 2000)
-
-
-/**
- * 输出结果：
- * 1
- * 2
- * reset bar
- * 
- * 结果：深响应，设置 obj.foo.bar 的值时触发副作用函数重新执行
- */
-

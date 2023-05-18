@@ -33,7 +33,7 @@ function cleanup(effectFn) {
         const deps = effectFn.deps[i]
         deps.delete(effectFn)
     }
-    effectFn.deps.lenght = 0
+    effectFn.deps.length = 0
 }
 
 // 存储副作用函数的“桶”
@@ -43,7 +43,7 @@ const ITERATE_KEY = Symbol()
 
 // 封装 createReactive 函数，接收一个参数 isShallow，代表是否为浅响应，默认为 false，即非浅响应
 function createReactive(obj, isShallow = false) {
-// 对原始数据的代理
+    // 对原始数据的代理
     return new Proxy(obj, {
         // 拦截读取操作
         get(target, key, receiver) {
@@ -55,11 +55,11 @@ function createReactive(obj, isShallow = false) {
             const res = Reflect.get(target, key, receiver)
 
             // 如果是浅响应，直接返回原始值
-            if(isShallow){
+            if (isShallow) {
                 return res
             }
 
-            if(typeof res === 'object' && res !== null){
+            if (typeof res === 'object' && res !== null) {
                 return createReactive(res)
             }
             return res

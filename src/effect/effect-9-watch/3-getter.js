@@ -38,7 +38,7 @@ function cleanup(effectFn) {
         const deps = effectFn.deps[i]
         deps.delete(effectFn)
     }
-    effectFn.deps.lenght = 0
+    effectFn.deps.length = 0
 }
 
 const bucket = new WeakMap()
