@@ -1,5 +1,5 @@
 /**
- * 【代理数组】- 遍历数组 for...of
+ * 【代理数组】- 数组的查找方法
  * 分析：
  * 1. 数组是一个特殊的对象-异质对象，数组对象除了 [[DefineOwnProprerty]] 这个内部方法外，其他内部方法的逻辑都与常规对象相同
  * 
@@ -23,24 +23,24 @@
  * 
  * -------------------------------------------------------------------------------------------------------------------
  * 
- * 【 for...in 】：
- * 1. 添加新元素：arr[100] = 'bar'
- * 2. 修改数组长度：arr.length = 0
- * 本质：修改了数组的 length 属性
- * 结论：数组 length 属性被修改，则 for...in 循环遍历数组的结果就会改变
+ * 【includes】
+ * 问题一：即使参数 obj 是相同的，每次调用 reactive 函数时，都会创建新的代理对象
+ * 实现目标：一个原始对象只有一个代理对象
+ * 解决：
+ * 1. 创建一个 reactiveMap，用来存储原始对象 obj 与 代理对象 proxy 的映射
+ * 2. 在创建代理对象之前，现在 reactiveMap 中查找，如果找到了则直接返回已有对象
+ * 3. 否则，创建新的代理对象，存储在 reactiveMap 中，并返回
  * 
- * 【 for...of 】:
- * 分析：
- * 1. for...of 是用来遍历可迭代对象（iterable object）的
- * 2. ES2015 为 JS 定了迭代协议：一个对象是否被迭代，取决于该对象或该对象的原型是否实现了 @@iterator 方法
- * 3. @@[name] 标志：在 ECMAScript 规范里用来代指 JS 内建的 symbols 值
- * 结论：
- * 1. 如果一个对象实现了 Symbol.iterator 方法，则该对象就是可以迭代的
- * 2. 数组内建了 Symbol.iterator 方法的实现
- * 3. 数组的 values 方法的返回值其实就是数组内建的迭代器
- *    Array.prototype.values === Array.prototype[Symbol.iterator]   // true
- *    使用 for...of 循环、调用 values 方法    ===>    读取数组的 Symbol.iterator 属性
- * 4. 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系   ===>  get 拦截中增加 判断 typeof key !== 'symbol'
+ * 问题二：includes 方法中 this 指向问题
+ * 实现目标：原始对象上的元素也可以查找到
+ * 前置条件：
+ * 1. arr.includes 看做访问 includes 属性 ===> 触发 get 拦截函数
+ * 2. get 拦截函数中，判断操作对象是数组，且读取的 key 存在于 arrayInstrumentations 上，则返回定义子在 arrayInstrumentations 上的值
+ * 解决：重写 includes 方法
+ * 1. 默认行为：在代理对象上查找
+ * 2. 如果代理对象上找不到，再在原始对象上查找
+ * 
+ * 【根据给定值返回查找结果：includes、indexOf、lastIndexOf】
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数
@@ -82,6 +82,26 @@ const bucket = new WeakMap()
 const ITERATE_KEY = Symbol()
 
 /**
+ * 【自定义 includes 方法】
+ * 1. includes 方法中的 this 指向代理对象
+ * 2. 先在代理对象中查找，将结果存储到 res 中
+ * 3. 再到原始对象（代理对象通过访问 raw 属性获取）上查找
+ */
+const originMethod = Array.prototype.includes
+const arrayInstrumentations = {}
+  ;['includes', 'indexOf', 'lastIndexOf'].forEach(method => {
+    arrayInstrumentations[method] = function (...args) {
+      // this 是代理对象，先在代理对象上查找，将结果存储到 res 中
+      let res = originMethod.apply(this, args)
+      if (res === false || res === -1) {
+        // 如果在代理对象上找不到，则到原始对象上查找，并更新 res 值
+        res = originMethod.apply(this.raw, args)
+      }
+      return res
+    }
+  })
+
+/**
  * 封装 createReactive 函数
  * @param {*} obj 原始对象
  * @param {*} isShallow 是否创建浅响应对象或浅只读对象，默认为 false，即创建深响应对象
@@ -92,8 +112,15 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     // 拦截读取操作
     get(target, key, receiver) {
+      console.log('get: ', key, target, receiver)
       if (key === 'raw') {
         return target
+      }
+      /**
+       * 如果操作目标是数组，并且 key 存在于 arrayInstrumentation 上，则返回定义在 arrayInstrumentation 上的值
+       */
+      if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
+        return Reflect.get(arrayInstrumentations, key, receiver)
       }
       /**
        * 1. 非只读时，才需要建立响应联系
@@ -401,82 +428,74 @@ function computed(getter) {
   return obj
 }
 
-// 创建深响应式对象
+// 定义一个 Map 实例，存储原始对象到代理对象的映射（obj -> proxy）
+const reactiveMap = new Map()
+
+/**
+ * 创建深响应式对象
+ * @param {*} obj 原始对象
+ * @returns 
+ * 1. 优先通过原始对象 obj 寻找之前创建的代理对象
+ * 2. 如果找到了直接返回已有代理对象
+ * 3. 否则，创建新的代理对象，并存储到 reactiveMap 中
+ * 
+ * 目的：避免为同一个原始对象多次创建代理对象
+ */
 function reactive(obj) {
-  return createReactive(obj)
+  const existonProxy = reactiveMap.get(obj)
+  if (existonProxy) return existonProxy
+
+  const proxy = createReactive(obj)
+  reactiveMap.set(obj, proxy)
+
+  return proxy
 }
 // 创建只读对象
 function readonly(obj) {
   return createReactive(obj, false, true)
 }
 
-/* 
-// 实现一个简单的可迭代的对象：实现 Symbol.iterator 方法
-const obj = {
-  val: 0,
-  [Symbol.iterator]() {
-    return {
-      next() {
-        return {
-          value: obj.val++,
-          done: obj.val > 10 ? true : false
-        }
-      }
-    }
-  }
-}
-for (const value of obj) {
-  console.log(value)
-}
-*/
+////////////////////////////////////////////////////////////////////////////////////////
 
-/*
-// 数组内建了 Symbol.iterator 方法的实现
-const arr = [1, 2, 3, 4, 5]
-// 默认情况下数组可以用 for...of 遍历
-for (const value of arr) {
-  console.log(value)
-}
-// 数组迭代器的模拟实现
-// 迭代数组元素时，会读取数组的索引和 length 属性
-arr[Symbol.iterator] = function () {
-  const target = this
-  const len = target.length
-  let index = 0
+// 测试数组的查找方法
+const obj = {}
+const arr = reactive([obj])
 
-  return {
-    next() {
-      return {
-        value: index < len ? target[index] : undefined,
-        done: index++ >= len
-      }
-    }
-  }
-}
-// 获取并调用数组内建的迭代器方法
-const itr = arr[Symbol.iterator]()
-console.log(itr.next())
-console.log(itr.next())
-console.log(itr.next())
-console.log(itr.next())
-console.log(itr.next())
-console.log(itr.next())
-*/
+// console.log(arr.includes(arr[0]))
+console.log(arr.includes(obj))
 
-const arr = reactive([1, 2, 3, 4, 5, 6])
+/**
+ * 【arr.includes(arr[0])】
+ * 输出结果：
+ * false
+ * 
+ * 解析：
+ * 1. 通过代理对象访问元素值时，如果值仍然是可以被代理的（值是对象），则得到的值就是新的代理对象
+ * 2. 即使参数 obj 是相同的，每次调用 reactive 函数时，都会创建新的代理对象
+ * 
+ * 目标：一个原始对象只有一个代理对象
+ * 
+ * 解决：
+ * 1. 创建一个 reactiveMap，用来存储原始对象 obj 与 代理对象 proxy 的映射
+ * 2. 在创建代理对象之前，现在 reactiveMap 中查找，如果找到了则直接返回已有对象
+ * 3. 否则，创建新的代理对象，存储在 reactiveMap 中，并返回
+ * 
+ * 修改后的结果：
+ * true
+ */
 
-effect(() => {
-  for (const value of arr) {
-    console.log(value)
-  }
-})
-
-setTimeout(() => {
-  console.log('-------------')
-  arr[1] = 'bar'
-}, 1000)
-
-setTimeout(() => {
-  console.log('-------------')
-  arr.length = 1
-}, 2000)
+/**
+ * 【arr.includes(obj)】
+ * 输出结果：
+ * false
+ * 
+ * 解析：
+ * 1. includes 内部的 this 指向代理对象 arr
+ * 2. 获取数组元素时，得到是代理对象
+ * 3. arr.includes 看做读取代理对象 arr 的 includes 属性，触发 get 拦截函数
+ * 
+ * 解决：
+ * 1. get 拦截函数中，检查操作目标是否是数组，且读取的是 includes 属性
+ * 2. arrayInstrumentation 对象上有 includes 属性，满足 1. 的条件时，返回 arrayInstrumentation 上相应的值
+ *    执行 arr.includes   ===>    执行 arrayInstrumentation 上的 includes 函数
+ */

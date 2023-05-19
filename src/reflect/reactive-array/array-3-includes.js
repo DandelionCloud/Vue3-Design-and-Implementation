@@ -1,5 +1,5 @@
 /**
- * 【代理数组】- 遍历数组 for...of
+ * 【代理数组】- 数组的查找方法 includes
  * 分析：
  * 1. 数组是一个特殊的对象-异质对象，数组对象除了 [[DefineOwnProprerty]] 这个内部方法外，其他内部方法的逻辑都与常规对象相同
  * 
@@ -23,27 +23,22 @@
  * 
  * -------------------------------------------------------------------------------------------------------------------
  * 
- * 【 for...in 】：
- * 1. 添加新元素：arr[100] = 'bar'
- * 2. 修改数组长度：arr.length = 0
- * 本质：修改了数组的 length 属性
- * 结论：数组 length 属性被修改，则 for...in 循环遍历数组的结果就会改变
- * 
- * 【 for...of 】:
- * 分析：
- * 1. for...of 是用来遍历可迭代对象（iterable object）的
- * 2. ES2015 为 JS 定了迭代协议：一个对象是否被迭代，取决于该对象或该对象的原型是否实现了 @@iterator 方法
- * 3. @@[name] 标志：在 ECMAScript 规范里用来代指 JS 内建的 symbols 值
- * 结论：
- * 1. 如果一个对象实现了 Symbol.iterator 方法，则该对象就是可以迭代的
- * 2. 数组内建了 Symbol.iterator 方法的实现
- * 3. 数组的 values 方法的返回值其实就是数组内建的迭代器
- *    Array.prototype.values === Array.prototype[Symbol.iterator]   // true
- *    使用 for...of 循环、调用 values 方法    ===>    读取数组的 Symbol.iterator 属性
- * 4. 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系   ===>  get 拦截中增加 判断 typeof key !== 'symbol'
- * 
  * 【includes】
- * 1. 即使参数 obj 是相同的，每次调用 reactive 函数时，都会创建新的代理对象
+ * 问题一：即使参数 obj 是相同的，每次调用 reactive 函数时，都会创建新的代理对象
+ * 实现目标：一个原始对象只有一个代理对象
+ * 解决：
+ * 1. 创建一个 reactiveMap，用来存储原始对象 obj 与 代理对象 proxy 的映射
+ * 2. 在创建代理对象之前，现在 reactiveMap 中查找，如果找到了则直接返回已有对象
+ * 3. 否则，创建新的代理对象，存储在 reactiveMap 中，并返回
+ * 
+ * 问题二：includes 方法中 this 指向问题
+ * 实现目标：原始对象上的元素也可以查找到
+ * 前置条件：
+ * 1. arr.includes 看做访问 includes 属性 ===> 触发 get 拦截函数
+ * 2. get 拦截函数中，判断操作对象是数组，且读取的 key 存在于 arrayInstrumentations 上，则返回定义子在 arrayInstrumentations 上的值
+ * 解决：重写 includes 方法
+ * 1. 默认行为：在代理对象上查找
+ * 2. 如果代理对象上找不到，再在原始对象上查找
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数
@@ -85,6 +80,25 @@ const bucket = new WeakMap()
 const ITERATE_KEY = Symbol()
 
 /**
+ * 【自定义 includes 方法】
+ * 1. includes 方法中的 this 指向代理对象
+ * 2. 先在代理对象中查找，将结果存储到 res 中
+ * 3. 再到原始对象（代理对象通过访问 raw 属性获取）上查找
+ */
+const originMethod = Array.prototype.includes
+const arrayInstrumentations = {
+  includes: function (...args) {
+    // 实现 arr.includes(obj) 的默认行为
+    let res = originMethod.apply(this, args)
+    if (res === false) {
+      // 如果在代理对象上找不到，则到原始对象上查找
+      res = originMethod.apply(this.raw, args)
+    }
+    return res
+  }
+}
+
+/**
  * 封装 createReactive 函数
  * @param {*} obj 原始对象
  * @param {*} isShallow 是否创建浅响应对象或浅只读对象，默认为 false，即创建深响应对象
@@ -95,8 +109,15 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     // 拦截读取操作
     get(target, key, receiver) {
+      console.log('get: ', key, target, receiver)
       if (key === 'raw') {
         return target
+      }
+      /**
+       * 如果操作目标是数组，并且 key 存在于 arrayInstrumentation 上，则返回定义在 arrayInstrumentation 上的值
+       */
+      if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
+        return Reflect.get(arrayInstrumentations, key, receiver)
       }
       /**
        * 1. 非只读时，才需要建立响应联系
@@ -468,4 +489,10 @@ console.log(arr.includes(obj))
  * 解析：
  * 1. includes 内部的 this 指向代理对象 arr
  * 2. 获取数组元素时，得到是代理对象
+ * 3. arr.includes 看做读取代理对象 arr 的 includes 属性，触发 get 拦截函数
+ * 
+ * 解决：
+ * 1. get 拦截函数中，检查操作目标是否是数组，且读取的是 includes 属性
+ * 2. arrayInstrumentation 对象上有 includes 属性，满足 1. 的条件时，返回 arrayInstrumentation 上相应的值
+ *    执行 arr.includes   ===>    执行 arrayInstrumentation 上的 includes 函数
  */
