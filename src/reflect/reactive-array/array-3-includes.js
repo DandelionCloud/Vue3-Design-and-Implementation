@@ -109,7 +109,6 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     // 拦截读取操作
     get(target, key, receiver) {
-      console.log('get: ', key, target, receiver)
       if (key === 'raw') {
         return target
       }
@@ -458,11 +457,8 @@ function readonly(obj) {
 const obj = {}
 const arr = reactive([obj])
 
-// console.log(arr.includes(arr[0]))
-console.log(arr.includes(obj))
-
+console.log(arr.includes(arr[0]))
 /**
- * 【arr.includes(arr[0])】
  * 输出结果：
  * false
  * 
@@ -481,8 +477,8 @@ console.log(arr.includes(obj))
  * true
  */
 
+console.log(arr.includes(obj))
 /**
- * 【arr.includes(obj)】
  * 输出结果：
  * false
  * 
@@ -495,4 +491,5 @@ console.log(arr.includes(obj))
  * 1. get 拦截函数中，检查操作目标是否是数组，且读取的是 includes 属性
  * 2. arrayInstrumentation 对象上有 includes 属性，满足 1. 的条件时，返回 arrayInstrumentation 上相应的值
  *    执行 arr.includes   ===>    执行 arrayInstrumentation 上的 includes 函数
+ * 3. arrayInstrumentation 上的 includes 函数：先在代理对象中查找，若没有找到则在原始对象中查找，并返回结果
  */

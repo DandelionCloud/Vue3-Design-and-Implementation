@@ -1,5 +1,5 @@
 /**
- * 【代理数组】- 数组的查找方法
+ * 【代理数组】- 数组的查找方法（根据给定值返回查找结果：includes、indexOf、lastIndexOf）
  * 分析：
  * 1. 数组是一个特殊的对象-异质对象，数组对象除了 [[DefineOwnProprerty]] 这个内部方法外，其他内部方法的逻辑都与常规对象相同
  * 
@@ -82,14 +82,13 @@ const bucket = new WeakMap()
 const ITERATE_KEY = Symbol()
 
 /**
- * 【自定义 includes 方法】
- * 1. includes 方法中的 this 指向代理对象
+ * 【自定义 arrayInstrumentations】
  * 2. 先在代理对象中查找，将结果存储到 res 中
  * 3. 再到原始对象（代理对象通过访问 raw 属性获取）上查找
  */
-const originMethod = Array.prototype.includes
 const arrayInstrumentations = {}
   ;['includes', 'indexOf', 'lastIndexOf'].forEach(method => {
+    const originMethod = Array.prototype[method]
     arrayInstrumentations[method] = function (...args) {
       // this 是代理对象，先在代理对象上查找，将结果存储到 res 中
       let res = originMethod.apply(this, args)
@@ -97,6 +96,7 @@ const arrayInstrumentations = {}
         // 如果在代理对象上找不到，则到原始对象上查找，并更新 res 值
         res = originMethod.apply(this.raw, args)
       }
+      // 返回最终结果
       return res
     }
   })
@@ -112,7 +112,6 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     // 拦截读取操作
     get(target, key, receiver) {
-      console.log('get: ', key, target, receiver)
       if (key === 'raw') {
         return target
       }
@@ -463,39 +462,12 @@ const arr = reactive([obj])
 
 // console.log(arr.includes(arr[0]))
 console.log(arr.includes(obj))
+console.log('index', arr.indexOf(arr[0]))
+console.log('index', arr.indexOf(obj))
 
 /**
- * 【arr.includes(arr[0])】
  * 输出结果：
- * false
- * 
- * 解析：
- * 1. 通过代理对象访问元素值时，如果值仍然是可以被代理的（值是对象），则得到的值就是新的代理对象
- * 2. 即使参数 obj 是相同的，每次调用 reactive 函数时，都会创建新的代理对象
- * 
- * 目标：一个原始对象只有一个代理对象
- * 
- * 解决：
- * 1. 创建一个 reactiveMap，用来存储原始对象 obj 与 代理对象 proxy 的映射
- * 2. 在创建代理对象之前，现在 reactiveMap 中查找，如果找到了则直接返回已有对象
- * 3. 否则，创建新的代理对象，存储在 reactiveMap 中，并返回
- * 
- * 修改后的结果：
- * true
- */
-
-/**
- * 【arr.includes(obj)】
- * 输出结果：
- * false
- * 
- * 解析：
- * 1. includes 内部的 this 指向代理对象 arr
- * 2. 获取数组元素时，得到是代理对象
- * 3. arr.includes 看做读取代理对象 arr 的 includes 属性，触发 get 拦截函数
- * 
- * 解决：
- * 1. get 拦截函数中，检查操作目标是否是数组，且读取的是 includes 属性
- * 2. arrayInstrumentation 对象上有 includes 属性，满足 1. 的条件时，返回 arrayInstrumentation 上相应的值
- *    执行 arr.includes   ===>    执行 arrayInstrumentation 上的 includes 函数
+ * true 
+ * index 0
+ * index 0
  */
