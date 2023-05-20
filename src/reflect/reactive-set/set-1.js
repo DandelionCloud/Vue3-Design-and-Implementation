@@ -1,5 +1,5 @@
 /**
- * 【代理 Set 和 Map】
+ * 【代理 Set 和 Map】- Set 数据对象的 size、add()、delete()
  * 集合类型：Map/Set 以及 WeakMap/WeakSet
  * 
  * 分析：
@@ -64,6 +64,30 @@ const arrayInstrumentations = {}
     }
   })
 
+// 定义一个对象，将自定义的 add 方法定义到该对象下
+const mutationInstrumentations = {
+  add(key) {
+    // this 指向代理对象，通过 raw 属性获取原始数据对象
+    const target = this.raw
+    // 通过原始数据对象执行方法，此时该方法中的 this 指向原始数据对象 target，此时不需要 bind 来改变 this 指向了
+    const res = target.add(key)
+    const hadKey = target.has(key)
+    if (!hadKey) {
+      trigger(target, key, 'ADD')
+    }
+    return res
+  },
+  delete(key) {
+    const target = this.raw
+    const hadKey = target.has(key)
+    const res = target.delete(key)
+    if (hadKey) {
+      trigger(target, key, 'DELETE')
+    }
+    return res
+  }
+}
+
 /**
  * 封装 createReactive 函数
  * @param {*} obj 原始对象
@@ -73,40 +97,28 @@ const arrayInstrumentations = {}
  */
 function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
-    // 拦截读取操作
-    get(target, key, receiver) {
-      if (key === 'raw') {
-        return target
-      }
+    get(target, key) {
+      if (key === 'raw') return target
       /**
-       * 1. 如果读取的是 size 属性
-       * 2. 指定第三个参数 receiver 为 原始对象 target
-       * 3. 调用 track 函数建立响应联系
+       * 解析：
+       * 1. 根据规范得知，访问 size 属性需要获取内部槽 [[SetData]] 这一内部槽仅在原始 Set 对象上存在
+       * 2. 任何新增 ADD 和删除 DELETE 都会影响 size 属性
+       * 3. 触发时，从 ITERATE_KEY 中取出（trigger 函数中，ADD 与 DELETE 操作类型时，取出与 ITERRATE_KEY 相关联的副作用函数执行）
+       * 4. 收集时，收集到 ITERATE_KEY 中
+       * 所以，副作用函数要与 ITERATE_KEY 建立响应联系
+       * 结论：
+       * 1. 影响集合大小（元素数量），但对于具体的key未知的情况下，副作用函数与ITERATE_KEY建立响应联系
        */
+      // 如果读取的是 size 属性，通过指定 receiver 为 target 来修复 this 指向问题
       if (key === 'size') {
+        // 调用 track 函数建立响应联系
         track(target, ITERATE_KEY)
         return Reflect.get(target, key, target)
       }
-      // 如果操作目标是数组，且是数组某几种方法，则通过 arrayInstrumentations 自定义
-      if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
-        return Reflect.get(arrayInstrumentations, key, receiver)
-      }
-      // 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系
-      if (!isReadonly && typeof key !== 'symbol') {
-        track(target, key)
-      }
-      /**
-       * 1. 将方法与原始数据对象 target 绑定后返回
-       * 2. delete 函数的 this 总是指向原始对象
-       */
-      const res = target[key].bind(target)
-      if (isShallow) {
-        return res
-      }
-      if (typeof res === 'object' && res !== null) {
-        return isReadonly ? readonly(res) : reactive(res)
-      }
-      return res
+      // 将方法与原始数据对象 target 绑定后返回 ===> p.delete(1) 语句执行时，delete 函数的 this 指向原始数据对象
+      // return target[key].bind(target)
+      // 返回定义在 mutationInstrumentations 对象下的方法
+      return mutationInstrumentations[key]
     },
     // 拦截设置操作
     set(target, key, newVal, receiver) {
@@ -439,9 +451,9 @@ console.log(p.delete(1))
  *    p.delete(1) 语句会执行 delete 操作，此时 this 指向代理对象 p，而不会指向原始 Set 对象
  * 
  * 
- * 修复：
- * 1. 修正访问器属性的 getter 函数执行时 this 指向
- * 2. 把 delete 方法与原始数据对象绑定 target[key].bind(target)  ===>  delete 函数的 this 指向原始数据
+ * 两种改变 this 指向的方法：
+ * 1. 访问器属性，修正其 getter 函数执行时的 this 指向：通过 Reflect.get(target, key, receiver) 的第三个参数 receiver 指定
+ * 2. 属性方法，它在执行时才确定 this 指向：使用 bind 函数将方法与原始数据绑定 ===> target[key].bind(target)
  */
 
 const p2 = reactive(new Set([1, 2, 4]))

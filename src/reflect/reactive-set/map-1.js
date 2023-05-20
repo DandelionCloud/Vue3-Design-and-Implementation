@@ -1,48 +1,13 @@
 /**
- * 【代理数组】- 隐式修改数组长度的原型方法
- * 分析：
- * 1. 数组是一个特殊的对象-异质对象，数组对象除了 [[DefineOwnProprerty]] 这个内部方法外，其他内部方法的逻辑都与常规对象相同
+ * 【代理 Set 和 Map】- Map 对象的 get()、set()
+ * 集合类型：Map/Set 以及 WeakMap/WeakSet
  * 
- * 2. 所有对数组元素或属性的“读取”操作：
- *    - 通过索引访问数组元素值：arr[0]
- *    - 访问数组的长度：arr.length
- *    - 把数组作为对象，使用 for...in 循环遍历
- *    - 使用 for...of 迭代遍历数组
- *    - 数组的原型方法，如 concat/join/every/some/find/findIndex/includes 等，以及其他所有不改变原数组的原型方法
- * 
- * 3. 对数组元素或属性的设置操作：
- *    - 通过索引修改数组元素值：arr[1] = 3
- *    - 修改数组长度：arr.length = 0
- *    - 数组的栈方法：push/pop/shift/unshift
- *    - 修改原数组的原型方法：splice/fill/sort等
- *  
- * 注意：
- * 1. 通过索引读取或设置数组元素值时，代理对象的 get/set 拦截会执行，可以正确的触发响应
- * 2. 因为内部方法 [[DefineOwnProperty]] 的实现不同，通过索引设置数组的元素值和设置对象的属性值根本上是不同的：
- *    通过索引设置数组元素值 ===> 执行数组对象部署的内部方法 [[Set]] ===> 依赖于 [[DefineOwnProperty]]
- * 
- * -------------------------------------------------------------------------------------------------------------------
- * push/pop/shift/unshift/splice
- * ECMAScript 规范：调用数组的 push 方法向数组中添加元素时，既会读取数组的 length 属性，又会设置数组的 length 属性值。
- * 导致的问题：两个独立的副作用函数相互影响。
- * 
- * 解析：
- * 1. push 方法在语义上是修改操作，而非读取操作，所以避免建立响应联系并不会产生其他副作用
- * 2. 所以不用建立 length 与 副作用函数之间的响应联系 ===> 屏蔽对 length 属性的读取
- * 
- * 【重写数组的 push 方法】
- * 1. 增加一个标记变量 shouldTrack，代表是否进行追踪，默认 true
- * 2. 在调用原始方法之前，禁止追踪
- * 3. 在调用原始方法之后，恢复原来的行为（即可以追踪）
+ * 数据污染：将响应式数据设置到原始数据上的行为
  */
 
-// 用一个全局变量存储 当前被激活的 的副作用函数
 let activeEffect
-
-// effect 栈
 const effectStack = []
 
-// 注册函数
 function effect(fn, options = {}) {
   const effectFn = () => {
     cleanup(effectFn)
@@ -56,7 +21,6 @@ function effect(fn, options = {}) {
   effectFn.options = options
   effectFn.deps = []
   if (!options.lazy) {
-    console.log('invoke effectFn')
     effectFn()
   }
   return effectFn
@@ -70,45 +34,80 @@ function cleanup(effectFn) {
   effectFn.deps.length = 0
 }
 
-// 存储副作用函数的“桶”
 const bucket = new WeakMap()
-
 const ITERATE_KEY = Symbol()
 
-/**
- * 【自定义 arrayInstrumentations】
- * 1. 先在代理对象中查找，将结果存储到 res 中
- * 2. 再到原始对象（代理对象通过访问 raw 属性获取）上查找
- * 3. 标记是否可以允许追踪
- */
-// 代表是否进行追踪。默认值为 true，即允许追踪
+// 自定义数组方法 arrayInstrumentations
 let shouldTrack = true
 const arrayInstrumentations = {}
+  // 重写数组的查找方法
   ;['includes', 'indexOf', 'lastIndexOf'].forEach(method => {
     const originMethod = Array.prototype[method]
     arrayInstrumentations[method] = function (...args) {
-      // this 是代理对象，先在代理对象上查找，将结果存储到 res 中
       let res = originMethod.apply(this, args)
       if (res === false || res === -1) {
-        // 如果在代理对象上找不到，则到原始对象上查找，并更新 res 值
         res = originMethod.apply(this.raw, args)
       }
-      // 返回最终结果
       return res
     }
   })
-  // 重写数组的 push、pop、shift、unshift 以及 splice 方法
+  // 重写数组的隐式修改数组长度的原型方法
   ;['push', 'pop', 'shift', 'unshift', 'splice'].forEach(method => {
     const originMethod = Array.prototype[method]
     arrayInstrumentations[method] = function (...args) {
-      // 在调用原始方法之前，禁止追踪
       shouldTrack = false
       let res = originMethod.apply(this, args)
-      // 在调用原始方法之后，恢复原来的行为，即允许追踪
       shouldTrack = true
       return res
     }
   })
+
+// 定义一个对象，将自定义的 add 方法定义到该对象下
+const mutationInstrumentations = {
+  add(key) {
+    // this 指向代理对象，通过 raw 属性获取原始数据对象
+    const target = this.raw
+    // 通过原始数据对象执行方法，此时该方法中的 this 指向原始数据对象 target，此时不需要 bind 来改变 this 指向了
+    const res = target.add(key)
+    const hadKey = target.has(key)
+    if (!hadKey) {
+      trigger(target, key, 'ADD')
+    }
+    return res
+  },
+  delete(key) {
+    const target = this.raw
+    const hadKey = target.has(key)
+    const res = target.delete(key)
+    if (hadKey) {
+      trigger(target, key, 'DELETE')
+    }
+    return res
+  },
+  get(key) {
+    const target = this.raw
+    const had = target.has(key)
+    // 追踪依赖，建立响应
+    track(target, key)
+    if (had) {
+      const res = target.get(key)
+      return typeof res === 'object' ? reactive(res) : res
+    }
+  },
+  set(key, value) {
+    const target = this.raw
+    const had = target.has(key)
+    const oldValue = target.get(key)
+    target.set(key, value)
+    // 如果不存在，则是新增 ADD
+    if (!had) {
+      trigger(target, key, 'ADD')
+    } else if (oldValue !== value || (oldValue === oldValue && value === value)) {
+      // 如果存在，且值变了，则是设置 SET
+      trigger(target, key, 'SET')
+    }
+  }
+}
 
 /**
  * 封装 createReactive 函数
@@ -119,33 +118,28 @@ const arrayInstrumentations = {}
  */
 function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
-    // 拦截读取操作
-    get(target, key, receiver) {
-      if (key === 'raw') {
-        return target
-      }
+    get(target, key) {
+      if (key === 'raw') return target
       /**
-       * 如果操作目标是数组，并且 key 存在于 arrayInstrumentation 上，则返回定义在 arrayInstrumentation 上的值
+       * 解析：
+       * 1. 根据规范得知，访问 size 属性需要获取内部槽 [[SetData]] 这一内部槽仅在原始 Set 对象上存在
+       * 2. 任何新增 ADD 和删除 DELETE 都会影响 size 属性
+       * 3. 触发时，从 ITERATE_KEY 中取出（trigger 函数中，ADD 与 DELETE 操作类型时，取出与 ITERRATE_KEY 相关联的副作用函数执行）
+       * 4. 收集时，收集到 ITERATE_KEY 中
+       * 所以，副作用函数要与 ITERATE_KEY 建立响应联系
+       * 结论：
+       * 1. 影响集合大小（元素数量），但对于具体的key未知的情况下，副作用函数与ITERATE_KEY建立响应联系
        */
-      if (Array.isArray(target) && arrayInstrumentations.hasOwnProperty(key)) {
-        return Reflect.get(arrayInstrumentations, key, receiver)
+      // 如果读取的是 size 属性，通过指定 receiver 为 target 来修复 this 指向问题
+      if (key === 'size') {
+        // 调用 track 函数建立响应联系
+        track(target, ITERATE_KEY)
+        return Reflect.get(target, key, target)
       }
-      /**
-       * 1. 非只读时，才需要建立响应联系
-       * 2. 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系
-       */
-      if (!isReadonly && typeof key !== 'symbol') {
-        console.log('track')
-        track(target, key)
-      }
-      const res = Reflect.get(target, key, receiver)
-      if (isShallow) {
-        return res
-      }
-      if (typeof res === 'object' && res !== null) {
-        return isReadonly ? readonly(res) : reactive(res)
-      }
-      return res
+      // 将方法与原始数据对象 target 绑定后返回 ===> p.delete(1) 语句执行时，delete 函数的 this 指向原始数据对象
+      // return target[key].bind(target)
+      // 返回定义在 mutationInstrumentations 对象下的方法
+      return mutationInstrumentations[key]
     },
     // 拦截设置操作
     set(target, key, newVal, receiver) {
@@ -155,11 +149,6 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
       }
 
       const oldValue = target[key]
-      /**
-       * 1. 如果代理目标是数组，则检查被设置的索引值是否小于数组长度
-       * 2. 如果小于数组长度，则为设置 "SET" 操作
-       * 3. 否则，则为新增 "ADD" 操作
-       */
       const type = Array.isArray(target) ? Number(key) < target.length ? "SET" : "ADD" : Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
       const res = Reflect.set(target, key, newVal, receiver)
       if (target === receiver.raw) {
@@ -176,15 +165,6 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
     },
     // 拦截 for...in 循环
     ownKeys(target) {
-      /**
-       * 结论：属性个数的变化会影响 foo...in 遍历的结果
-       * 常规对象：属性个数发生变化（操作类型是 ADD 或者 DELETE ）
-       * 数组对象：属性个数发生变化，即数组元素个数 length 发生变化
-       * 
-       * 1. 操作目标是数组对象，使用 length 属性作为 key 并建立响应联系
-       * 2. 操作目标是长队对象，使用 ITERATE_KEY 作为 key 建立响应联系
-       * 
-       */
       track(target, Array.isArray(target) ? "length" : ITERATE_KEY)
       return Reflect.ownKeys(target)
     },
@@ -206,10 +186,7 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
 
 // 拦截函数 get 中调用 track() 追踪变化
 function track(target, key) {
-  /**
-   * 1. 当禁止追踪时，直接返回
-   * 2. 当 push 方法间接读取 length 属性时，禁止追踪，length 不与副作用函数建立响应联系
-   */
+  // 当禁止追踪时，直接返回
   if (!activeEffect || !shouldTrack) return
   let depsMap = bucket.get(target)
   if (!depsMap) {
@@ -241,7 +218,6 @@ function trigger(target, key, type, newVal) {
       effectsToRun.add(effectFn)
     }
   })
-  // 只有当操作类型为 "ADD" 或 'DELETE' 时，才触发与 ITERATE_KEY 相关联的副作用函数重新执行
   if (type === 'ADD' || type === 'DELETE') {
     const iterateEffects = depsMap.get(ITERATE_KEY)
     iterateEffects && iterateEffects.forEach(effectFn => {
@@ -250,11 +226,7 @@ function trigger(target, key, type, newVal) {
       }
     })
   }
-  /**
-   * 1. 操作目标是数组对象，且操作类型为 ADD
-   *    ADD ===> 新增了数组元素 ===> 隐式地改变了数组的 length 属性值
-   * 2. 取出与 length 属性相关联的副作用函数，添加到 effectsToRun 中待执行
-   */
+  // 向数组添加元素时，取出与 length 属性相关联的副作用函数，添加到 effectsToRun 中待执行
   if (type === 'ADD' && Array.isArray(target)) {
     const lengthEffects = depsMap.get('length')
     lengthEffects && lengthEffects.forEach(effectFn => {
@@ -263,11 +235,7 @@ function trigger(target, key, type, newVal) {
       }
     })
   }
-  /**
-   * 1. 操作目标是数组对象，且修改了数组的 length 属性
-   *    修改数组的 length 属性 ===> 隐式地影响了索引大于等于 length 新值的元素
-   * 2. 对于 index >= length 的元素，取出与它们相关的副作用函数，添加到 effectsToRun 中待执行
-   */
+  // 通过 length 属性修改数组长度时，取出索引大于等于 length 新值的关联的副作用函数，添加到 effectsToRun 中待执行
   if (Array.isArray(target) && key === 'length') {
     depsMap.forEach((effects, key) => {
       if (key >= newVal) {
@@ -473,50 +441,26 @@ function reactive(obj) {
 }
 
 //////////////////////////////////////////// 测试 ////////////////////////////////////////////
+// 测试污染原始数据
+const m = new Map()
+const p1 = reactive(m)
+const p2 = reactive(new Map())
 
-// 测试隐式修改数组长度的原型方法
-const arr = reactive([])
-// effect(function effectFn1() { arr.push(1) })
-// effect(function effectFn2() { arr.push(1) })
+p1.set('p2', p2)
+
 effect(() => {
-  for (const i of arr) {
-    console.log('for...of', i)
-  }
-  console.log('includes 2:', arr.includes(2))
+  console.log(m.get('p2').size)
 })
 
 setTimeout(() => {
-  arr.push(1)
-}, 2000)
-
-setTimeout(() => {
-  arr.push(2)
+  m.get('p2').set('foo', 1)
 })
 
 /**
- * 错误：Uncaught TypeError: Maximum call stack size exceed
- *
- * 解析：
- * 1. 调用数组的 push 方法向数组添加元素时，既会读取数组的 length 属性，也会设置数组的 length 属性值
- * 2. 副作用函数先执行，再与 length 建立响应联系
- * 输出：
- * invoke effectFn
- * track
- * track
- *
- * - 读取 length 属性 ===> length 与 effectFn1、effectFn2 建立响应联系
- * - 设置 length 属性 ===> 触发响应执行（取出与 length 属性关联的所有副作用函数）
- * - effectFn2 里面触发响应 ===> effectFn1 执行 ===> effectFn1 触发响应 ===> effectFn2 执行 ===> ...
- *
- * 解决：屏蔽对 length 属性的读取
- *
- * 修复后的输出：
- * invoke effectFn
- * track
- * invoke effectFn
- * track
+ * 输出结果：
+ * 0
+ * 1
+ * 
+ * 分析：通过原始对象 m 设置，触发了响应
  */
 
-
-// 、、、、、、、、、、、、、、、、、、、、 问题 、、、、、、、、、、、、、、、、、、、、、、、、、、、、、
-// 问题一：includes()、indexOf()、 lastIndexOf() 方法所在的副作用函数，为何在数组 push 之后可以重新被触发执行？并不见 track 函数进行依赖收集？
