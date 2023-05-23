@@ -1,18 +1,14 @@
 /**
- * 【浅响应与深响应】- [ reactive 与 shallowReactive ]
+ * 【代理 Set 和 Map】- Set 数据对象的 size、add()、delete()
+ * 集合类型：Map/Set 以及 WeakMap/WeakSet
  * 
- * 当前目标：实现一个 深响应 reactive
+ * 分析：
  * 
- * 解决：在 get 拦截函数中，如果返回值是一个对象，则调用 reactive 将结果包装成响应式数据并返回
  */
 
-// 用一个全局变量存储 当前被激活的 的副作用函数
 let activeEffect
-
-// effect 栈
 const effectStack = []
 
-// 注册函数
 function effect(fn, options = {}) {
   const effectFn = () => {
     cleanup(effectFn)
@@ -26,6 +22,7 @@ function effect(fn, options = {}) {
   effectFn.options = options
   effectFn.deps = []
   if (!options.lazy) {
+    console.log('invoke effectFn')
     effectFn()
   }
   return effectFn
@@ -39,37 +36,103 @@ function cleanup(effectFn) {
   effectFn.deps.length = 0
 }
 
-// 存储副作用函数的“桶”
 const bucket = new WeakMap()
-
 const ITERATE_KEY = Symbol()
-// 对原始数据的代理
-function reactive(obj) {
-  return new Proxy(obj, {
-    // 拦截读取操作
-    get(target, key, receiver) {
-      // 代理对象通过 raw 属性访问原始数据
-      if (key === 'raw') {
-        return target
-      }
-      track(target, key)
-      const res = Reflect.get(target, key, receiver)
-      if (typeof res === 'object' && res !== null) {
-        // 调用 reactive 将结果包装成响应式数据并返回
-        return reactive(res)
+
+// 自定义数组方法 arrayInstrumentations
+let shouldTrack = true
+const arrayInstrumentations = {}
+  // 重写数组的查找方法
+  ;['includes', 'indexOf', 'lastIndexOf'].forEach(method => {
+    const originMethod = Array.prototype[method]
+    arrayInstrumentations[method] = function (...args) {
+      let res = originMethod.apply(this, args)
+      if (res === false || res === -1) {
+        res = originMethod.apply(this.raw, args)
       }
       return res
+    }
+  })
+  // 重写数组的隐式修改数组长度的原型方法
+  ;['push', 'pop', 'shift', 'unshift', 'splice'].forEach(method => {
+    const originMethod = Array.prototype[method]
+    arrayInstrumentations[method] = function (...args) {
+      shouldTrack = false
+      let res = originMethod.apply(this, args)
+      shouldTrack = true
+      return res
+    }
+  })
+
+// 定义一个对象，将自定义的 add 方法定义到该对象下
+const mutationInstrumentations = {
+  add(key) {
+    // this 指向代理对象，通过 raw 属性获取原始数据对象
+    const target = this.raw
+    // 通过原始数据对象执行方法，此时该方法中的 this 指向原始数据对象 target，此时不需要 bind 来改变 this 指向了
+    const res = target.add(key)
+    const hadKey = target.has(key)
+    if (!hadKey) {
+      trigger(target, key, 'ADD')
+    }
+    return res
+  },
+  delete(key) {
+    const target = this.raw
+    const hadKey = target.has(key)
+    const res = target.delete(key)
+    if (hadKey) {
+      trigger(target, key, 'DELETE')
+    }
+    return res
+  }
+}
+
+/**
+ * 封装 createReactive 函数
+ * @param {*} obj 原始对象
+ * @param {*} isShallow 是否创建浅响应对象或浅只读对象，默认为 false，即创建深响应对象
+ * @param {*} isReadonly 是否只读，默认为 false，即非只读
+ * @returns 
+ */
+function createReactive(obj, isShallow = false, isReadonly = false) {
+  return new Proxy(obj, {
+    get(target, key) {
+      if (key === 'raw') return target
+      /**
+       * 解析：
+       * 1. 根据规范得知，访问 size 属性需要获取内部槽 [[SetData]] 这一内部槽仅在原始 Set 对象上存在
+       * 2. 任何新增 ADD 和删除 DELETE 都会影响 size 属性
+       * 3. 触发时，从 ITERATE_KEY 中取出（trigger 函数中，ADD 与 DELETE 操作类型时，取出与 ITERRATE_KEY 相关联的副作用函数执行）
+       * 4. 收集时，收集到 ITERATE_KEY 中
+       * 所以，副作用函数要与 ITERATE_KEY 建立响应联系
+       * 结论：
+       * 1. 影响集合大小（元素数量），但对于具体的key未知的情况下，副作用函数与ITERATE_KEY建立响应联系
+       */
+      // 如果读取的是 size 属性，通过指定 receiver 为 target 来修复 this 指向问题
+      if (key === 'size') {
+        // 调用 track 函数建立响应联系
+        track(target, ITERATE_KEY)
+        return Reflect.get(target, key, target)
+      }
+      // 将方法与原始数据对象 target 绑定后返回 ===> p.delete(1) 语句执行时，delete 函数的 this 指向原始数据对象
+      // return target[key].bind(target)
+      // 返回定义在 mutationInstrumentations 对象下的方法
+      return mutationInstrumentations[key]
     },
     // 拦截设置操作
     set(target, key, newVal, receiver) {
+      if (isReadonly) {
+        console.warn(`属性 ${key} 是只读的`)
+        return true
+      }
+
       const oldValue = target[key]
-      const type = Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
+      const type = Array.isArray(target) ? Number(key) < target.length ? "SET" : "ADD" : Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
       const res = Reflect.set(target, key, newVal, receiver)
-      // target === receiver.raw 表明 receiver 就是 target 的代理对象
       if (target === receiver.raw) {
-        // 比较新值与旧值，只有当它们不全等，且不都是 NaN 的时候才触发响应（NaN !== NaN）
         if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
-          trigger(target, key, type)
+          trigger(target, key, type, newVal)
         }
       }
       return res
@@ -81,11 +144,15 @@ function reactive(obj) {
     },
     // 拦截 for...in 循环
     ownKeys(target) {
-      track(target, ITERATE_KEY)
+      track(target, Array.isArray(target) ? "length" : ITERATE_KEY)
       return Reflect.ownKeys(target)
     },
     // 拦截 delete 操作
     deleteProperty(target, key) {
+      if (isReadonly) {
+        console.warn(`属性 ${key} 是只读的`)
+        return true
+      }
       const hadKey = Object.prototype.hasOwnProperty.call(target, key)
       const res = Reflect.deleteProperty(target, key)
       if (res && hadKey) {
@@ -98,7 +165,8 @@ function reactive(obj) {
 
 // 拦截函数 get 中调用 track() 追踪变化
 function track(target, key) {
-  if (!activeEffect) return
+  // 当禁止追踪时，直接返回
+  if (!activeEffect || !shouldTrack) return
   let depsMap = bucket.get(target)
   if (!depsMap) {
     bucket.set(target, (depsMap = new Map()))
@@ -116,9 +184,10 @@ function track(target, key) {
  * @param {*} target 目标对象
  * @param {*} key 属性名
  * @param {*} type 操作类型
+ * @param {*} newVal 新值
  * @returns 
  */
-function trigger(target, key, type) {
+function trigger(target, key, type, newVal) {
   const depsMap = bucket.get(target)
   if (!depsMap) { return }
   const effects = depsMap.get(key)
@@ -128,12 +197,32 @@ function trigger(target, key, type) {
       effectsToRun.add(effectFn)
     }
   })
-  // 只有当操作类型为 "ADD" 或 'DELETE' 时，才触发与 ITERATE_KEY 相关联的副作用函数重新执行
   if (type === 'ADD' || type === 'DELETE') {
     const iterateEffects = depsMap.get(ITERATE_KEY)
     iterateEffects && iterateEffects.forEach(effectFn => {
       if (effectFn !== activeEffect) {
         effectsToRun.add(effectFn)
+      }
+    })
+  }
+  // 向数组添加元素时，取出与 length 属性相关联的副作用函数，添加到 effectsToRun 中待执行
+  if (type === 'ADD' && Array.isArray(target)) {
+    const lengthEffects = depsMap.get('length')
+    lengthEffects && lengthEffects.forEach(effectFn => {
+      if (effectFn !== activeEffect) {
+        effectsToRun.add(effectFn)
+      }
+    })
+  }
+  // 通过 length 属性修改数组长度时，取出索引大于等于 length 新值的关联的副作用函数，添加到 effectsToRun 中待执行
+  if (Array.isArray(target) && key === 'length') {
+    depsMap.forEach((effects, key) => {
+      if (key >= newVal) {
+        effects.forEach(effectFn => {
+          if (effectFn !== activeEffect) {
+            effectsToRun.add(effectFn)
+          }
+        })
       }
     })
   }
@@ -299,28 +388,73 @@ function computed(getter) {
   return obj
 }
 
+///////////////////////////////////////////// 封装函数 ///////////////////////////////////////////
+
+/** 封装 readonly 创建只读对象 */
+function readonly(obj) {
+  return createReactive(obj, false, true)
+}
+
+/** 封装 reactive 创建深响应式对象 */
+// 定义一个 Map 实例，存储原始对象到代理对象的映射（obj -> proxy）
+const reactiveMap = new Map()
+
 /**
- * 测试：浅响应问题
+ * 创建深响应式对象
+ * @param {*} obj 原始对象
+ * @returns 
+ * 1. 优先通过原始对象 obj 寻找之前创建的代理对象
+ * 2. 如果找到了直接返回已有代理对象
+ * 3. 否则，创建新的代理对象，并存储到 reactiveMap 中
+ * 
+ * 目的：避免为同一个原始对象多次创建代理对象
  */
+function reactive(obj) {
+  const existonProxy = reactiveMap.get(obj)
+  if (existonProxy) return existonProxy
 
-const obj = reactive({ foo: { bar: 1 } })
+  const proxy = createReactive(obj)
+  reactiveMap.set(obj, proxy)
 
-effect(() => {
-  console.log(obj.foo.bar)
+  return proxy
+}
+
+//////////////////////////////////////////// 测试 ////////////////////////////////////////////
+
+// 测试 Proxy 代理 Set
+const s = new Set([1, 2])
+const p = new Proxy(s, {
+  get(target, key, receiver) {
+    // 如果读取的是 size 属性
+    if (key === 'size') {
+      // 指定第三个参数 receiver 为 原始对象 target
+      return Reflect.get(target, key, target)
+    }
+    /**
+     * 1. 将方法与原始数据对象 target 绑定后返回
+     * 2. delete 函数的 this 总是指向原始对象
+     */
+    return target[key].bind(target)
+  }
 })
 
-setTimeout(() => {
-  obj.foo.bar = 2
-  console.log('reset bar')
-}, 2000)
-
+console.log(p.size)
+console.log(p.delete(1))
 
 /**
- * 输出结果：
- * 1
- * 2
- * reset bar
+ * 错误：Uncaught TypeError: Method get Set.prototype.size called on incompatible receiver #<Set>
  * 
- * 结果：深响应，设置 obj.foo.bar 的值时触发副作用函数重新执行
+ * 分析：
+ * 1. 规范指出 Set.prototype.size 是一个访问器属性。
+ * 【一条知识点：this 的指向在函数执行时确定，指向当前函数执行的上下文对象，即当前函数所属作用域。】
+ * 2. delete 是一个方法，访问 p.delete 时，delete 方法不执行
+ *    p.delete(1) 语句会执行 delete 操作，此时 this 指向代理对象 p，而不会指向原始 Set 对象
+ * 
+ * 
+ * 两种改变 this 指向的方法：
+ * 1. 访问器属性，修正其 getter 函数执行时的 this 指向：通过 Reflect.get(target, key, receiver) 的第三个参数 receiver 指定
+ * 2. 属性方法，它在执行时才确定 this 指向：使用 bind 函数将方法与原始数据绑定 ===> target[key].bind(target)
  */
 
+const p2 = reactive(new Set([1, 2, 4]))
+console.log(p2.size)
