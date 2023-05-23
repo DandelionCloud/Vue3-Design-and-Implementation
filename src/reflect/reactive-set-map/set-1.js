@@ -2,7 +2,11 @@
  * 【代理 Set 和 Map】- Set 数据对象的 size、add()、delete()
  * 集合类型：Map/Set 以及 WeakMap/WeakSet
  * 
- * 分析：
+ * 前置知识：this 的指向在函数执行时确定，指向当前函数执行的上下文对象，即当前函数所属作用域。
+ *
+ * 两种改变 this 指向的方法：
+ * 1. 访问器属性 ===> 修正其 getter 函数执行时的 this 指向 ===> Reflect.get(target, key, receiver) 中 receiver 指定
+ * 2. 属性方法(执行时才确定 this 指向)===> 使用 bind 函数 ===> target[key].bind(target)
  * 
  */
 
@@ -64,7 +68,7 @@ const arrayInstrumentations = {}
     }
   })
 
-// 定义一个对象，将自定义的 add 方法定义到该对象下
+// 自定义集合类型方法 mutableInstrumentations
 const mutationInstrumentations = {
   add(key) {
     // this 指向代理对象，通过 raw 属性获取原始数据对象
@@ -119,46 +123,6 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
       // return target[key].bind(target)
       // 返回定义在 mutationInstrumentations 对象下的方法
       return mutationInstrumentations[key]
-    },
-    // 拦截设置操作
-    set(target, key, newVal, receiver) {
-      if (isReadonly) {
-        console.warn(`属性 ${key} 是只读的`)
-        return true
-      }
-
-      const oldValue = target[key]
-      const type = Array.isArray(target) ? Number(key) < target.length ? "SET" : "ADD" : Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
-      const res = Reflect.set(target, key, newVal, receiver)
-      if (target === receiver.raw) {
-        if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
-          trigger(target, key, type, newVal)
-        }
-      }
-      return res
-    },
-    // 拦截 in 操作符
-    has(target, key) {
-      track(target, key)
-      return Reflect.has(target, key)
-    },
-    // 拦截 for...in 循环
-    ownKeys(target) {
-      track(target, Array.isArray(target) ? "length" : ITERATE_KEY)
-      return Reflect.ownKeys(target)
-    },
-    // 拦截 delete 操作
-    deleteProperty(target, key) {
-      if (isReadonly) {
-        console.warn(`属性 ${key} 是只读的`)
-        return true
-      }
-      const hadKey = Object.prototype.hasOwnProperty.call(target, key)
-      const res = Reflect.deleteProperty(target, key)
-      if (res && hadKey) {
-        trigger(target, key, "DELETE")
-      }
-      return res
     }
   })
 }
@@ -438,6 +402,7 @@ const p = new Proxy(s, {
   }
 })
 
+// p.size 即访问代理对象的 size 属性，会触发 get 拦截函数
 console.log(p.size)
 console.log(p.delete(1))
 
@@ -448,12 +413,8 @@ console.log(p.delete(1))
  * 1. 规范指出 Set.prototype.size 是一个访问器属性。
  * 【一条知识点：this 的指向在函数执行时确定，指向当前函数执行的上下文对象，即当前函数所属作用域。】
  * 2. delete 是一个方法，访问 p.delete 时，delete 方法不执行
- *    p.delete(1) 语句会执行 delete 操作，此时 this 指向代理对象 p，而不会指向原始 Set 对象
- * 
- * 
- * 两种改变 this 指向的方法：
- * 1. 访问器属性，修正其 getter 函数执行时的 this 指向：通过 Reflect.get(target, key, receiver) 的第三个参数 receiver 指定
- * 2. 属性方法，它在执行时才确定 this 指向：使用 bind 函数将方法与原始数据绑定 ===> target[key].bind(target)
+ *    p.delete(1) 语句会执行 delete 操作，此时 this 指向代理对象 p，而不会指向原始 Set 对象。
+ *    但是，只有原始 Set 对象才能够进行 delete 操作，所以需要将 this 指向原始 Set 对象。
  */
 
 const p2 = reactive(new Set([1, 2, 4]))

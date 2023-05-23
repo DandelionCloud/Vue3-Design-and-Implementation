@@ -33,14 +33,14 @@
  * 分析：
  * 1. for...of 是用来遍历可迭代对象（iterable object）的
  * 2. ES2015 为 JS 定了迭代协议：一个对象是否被迭代，取决于该对象或该对象的原型是否实现了 @@iterator 方法
- * 3. @@[name] 标志：在 ECMAScript 规范里用来代指 JS 内建的 symbols 值
+ * 3. @@[name] 标志：在 ECMAScript 规范里用来代指 JS 内建的 symbols 值，所以 @@iterator 方法即 Symbol.iterator 方法
  * 结论：
  * 1. 如果一个对象实现了 Symbol.iterator 方法，则该对象就是可以迭代的
  * 2. 数组内建了 Symbol.iterator 方法的实现
  * 3. 数组的 values 方法的返回值其实就是数组内建的迭代器
  *    Array.prototype.values === Array.prototype[Symbol.iterator]   // true
  *    使用 for...of 循环、调用 values 方法    ===>    读取数组的 Symbol.iterator 属性
- * 4. 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系   ===>  get 拦截中增加 判断 typeof key !== 'symbol'
+ * 4. 不应该在副作用函数与 Symbol.iterator 这类 symbol 值之间建立响应联系   ===>  get 拦截中增加判断 typeof key !== 'symbol'
  */
 
 // 用一个全局变量存储 当前被激活的 的副作用函数

@@ -71,7 +71,7 @@ const arrayInstrumentations = {}
     }
   })
 
-// 定义一个对象，将自定义的 add 方法定义到该对象下
+// 自定义集合类型方法 mutableInstrumentations
 const mutableInstrumentations = {
   add(key) {
     // this 指向代理对象，通过 raw 属性获取原始数据对象
@@ -95,18 +95,12 @@ const mutableInstrumentations = {
   },
   // Map 的 get 方法
   get(key) {
-    // 获取原始对象
     const target = this.raw
-    // 判读读取 key 是否存在
     const had = target.has(key)
-    // 追踪依赖，建立响应联系
     track(target, key)
-    /**
-     * 1. 如果存在，则返回结果
-     * 2. 注意：如果此时的 res 仍然是可代理数据，则需要返回使用 reactive 包装后的响应式数据（非浅响应情况）
-     */
     if (had) {
       const res = target.get(key)
+      // 如果此时的 res 仍然是可代理数据，则需要返回使用 reactive 包装后的响应式数据（非浅响应情况）
       return typeof res === 'object' ? reactive(res) : res
     }
   },
@@ -116,20 +110,10 @@ const mutableInstrumentations = {
     const had = target.has(key)
     // 获取旧值
     const oldValue = target.get(key)
-    // 设置新值（此时直接把 value 设置到了原始数据上，可能导致原始数据被污染的问题）
-    /**
-     * 设置新值：
-     * 问题：数据污染，即将响应式数据设置到原始数据上
-     * 解决：判断值是否为响应式数据，若是，则通过 raw 属性获取原始数据
-     */
-    // target.set(key, value)
+    // 将响应式数据设置到原始数据上将导致数据污染，需获取原始数据
     const rawValue = value.raw || value
     target.set(key, rawValue)
-    /**
-     * 1. 如果不存在，说明是 ADD 类型的操作，即新增
-     * 2. 如果存在，且值变了，则是 SET 类型的操作，即修改
-     * 3. ADD 类型的操作会对数据的 size 属性产生影响，任何依赖 size 属性的副作用函数都需要在 ADD 类型的操作发生时重新执行。
-     */
+    // 区分操作类型（ADD-新增 SET-修改）
     if (!had) {
       trigger(target, key, 'ADD')
     } else if (oldValue !== value || (oldValue === oldValue && value === value)) {
@@ -167,66 +151,13 @@ function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     get(target, key) {
       if (key === 'raw') return target
-      /**
-       * 解析：
-       * 1. 根据规范得知，访问 size 属性需要获取内部槽 [[SetData]] 这一内部槽仅在原始 Set 对象上存在
-       * 2. 任何新增 ADD 和删除 DELETE 都会影响 size 属性
-       * 3. 触发时，从 ITERATE_KEY 中取出（trigger 函数中，ADD 与 DELETE 操作类型时，取出与 ITERRATE_KEY 相关联的副作用函数执行）
-       * 4. 收集时，收集到 ITERATE_KEY 中
-       * 所以，副作用函数要与 ITERATE_KEY 建立响应联系
-       * 结论：
-       * 1. 影响集合大小（元素数量），但对于具体的key未知的情况下，副作用函数与ITERATE_KEY建立响应联系
-       */
-      // 如果读取的是 size 属性，通过指定 receiver 为 target 来修复 this 指向问题
       if (key === 'size') {
-        // 调用 track 函数建立响应联系
         track(target, ITERATE_KEY)
+        // 只有 Set 类型的数据上有 [[SetData]] 内部槽，使用 receiver 来指定 this
         return Reflect.get(target, key, target)
       }
-      // 将方法与原始数据对象 target 绑定后返回 ===> p.delete(1) 语句执行时，delete 函数的 this 指向原始数据对象
-      // return target[key].bind(target)
       // 返回定义在 mutableInstrumentations 对象下的方法
       return mutableInstrumentations[key]
-    },
-    // 拦截设置操作
-    set(target, key, newVal, receiver) {
-      if (isReadonly) {
-        console.warn(`属性 ${key} 是只读的`)
-        return true
-      }
-
-      const oldValue = target[key]
-      const type = Array.isArray(target) ? Number(key) < target.length ? "SET" : "ADD" : Object.prototype.hasOwnProperty.call(target, key) ? "SET" : "ADD"
-      const res = Reflect.set(target, key, newVal, receiver)
-      if (target === receiver.raw) {
-        if (oldValue !== newVal && (oldValue === oldValue || newVal === newVal)) {
-          trigger(target, key, type, newVal)
-        }
-      }
-      return res
-    },
-    // 拦截 in 操作符
-    has(target, key) {
-      track(target, key)
-      return Reflect.has(target, key)
-    },
-    // 拦截 for...in 循环
-    ownKeys(target) {
-      track(target, Array.isArray(target) ? "length" : ITERATE_KEY)
-      return Reflect.ownKeys(target)
-    },
-    // 拦截 delete 操作
-    deleteProperty(target, key) {
-      if (isReadonly) {
-        console.warn(`属性 ${key} 是只读的`)
-        return true
-      }
-      const hadKey = Object.prototype.hasOwnProperty.call(target, key)
-      const res = Reflect.deleteProperty(target, key)
-      if (res && hadKey) {
-        trigger(target, key, "DELETE")
-      }
-      return res
     }
   })
 }

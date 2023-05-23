@@ -1,20 +1,13 @@
 /**
- * 【代理 Set 和 Map】- Map 对象的 get()、set()
+ * 【代理 Set 和 Map】- 迭代器方法
  * 集合类型：Map/Set 以及 WeakMap/WeakSet
  * 
- * 数据污染：将响应式数据设置到原始数据上的行为
- * 解决：在设置值之前进行判断，如果值是响应式数据，则通过 raw 属性获取其原始数据，然后再设置
- * const rawValue = value.raw || value
- * target.set(key, rawValue)
+ * 集合类型的迭代器方法：
+ * 1. entries
+ * 2. keys
+ * 3. values
  * 
- * 类似问题的遗留：
- * 1. Set 类型的 add 方法
- * 2. 普通对象的写值操作
- * 3. 为数组添加元素
- * 
- * 
- * 缺陷：通过 raw 属性来获取代理对象的原始数据
- * 严谨：使用唯一的标识来作为访问原始数据的键（如 Symbol）
+ * 注意：Map 或 Set 类型本身部署了 Symbol.iterator 方法，所以可以使用 for...of 进行迭代。
  */
 
 let activeEffect
@@ -76,6 +69,7 @@ const arrayInstrumentations = {}
 
 // 自定义集合类型方法 mutableInstrumentations
 const mutableInstrumentations = {
+  // Set 的 add 方法
   add(key) {
     // this 指向代理对象，通过 raw 属性获取原始数据对象
     const target = this.raw
@@ -87,6 +81,7 @@ const mutableInstrumentations = {
     }
     return res
   },
+  // Set 的 delete 方法
   delete(key) {
     const target = this.raw
     const hadKey = target.has(key)
@@ -98,18 +93,12 @@ const mutableInstrumentations = {
   },
   // Map 的 get 方法
   get(key) {
-    // 获取原始对象
     const target = this.raw
-    // 判读读取 key 是否存在
     const had = target.has(key)
-    // 追踪依赖，建立响应联系
     track(target, key)
-    /**
-     * 1. 如果存在，则返回结果
-     * 2. 注意：如果此时的 res 仍然是可代理数据，则需要返回使用 reactive 包装后的响应式数据（非浅响应情况）
-     */
     if (had) {
       const res = target.get(key)
+      // 如果此时的 res 仍然是可代理数据，则需要返回使用 reactive 包装后的响应式数据（非浅响应情况）
       return typeof res === 'object' ? reactive(res) : res
     }
   },
@@ -119,25 +108,33 @@ const mutableInstrumentations = {
     const had = target.has(key)
     // 获取旧值
     const oldValue = target.get(key)
-    // 设置新值（此时直接把 value 设置到了原始数据上，可能导致原始数据被污染的问题）
-    /**
-     * 设置新值：
-     * （原始）数据污染：将响应式数据设置到原始数据上
-     * 解决：判断值是否为响应式数据，若是，则通过 raw 属性获取原始数据
-     */
-    // target.set(key, value)
+    // 将响应式数据设置到原始数据上将导致数据污染，需获取原始数据
     const rawValue = value.raw || value
     target.set(key, rawValue)
-    /**
-     * 1. 如果不存在，说明是 ADD 类型的操作，即新增
-     * 2. 如果存在，且值变了，则是 SET 类型的操作，即修改
-     * 3. ADD 类型的操作会对数据的 size 属性产生影响，任何依赖 size 属性的副作用函数都需要在 ADD 类型的操作发生时重新执行。
-     */
+    // 区分操作类型（ADD-新增 SET-修改）
     if (!had) {
       trigger(target, key, 'ADD')
     } else if (oldValue !== value || (oldValue === oldValue && value === value)) {
       trigger(target, key, 'SET')
     }
+  },
+  // Map 的 forEach 方法
+  forEach(callback, thisArg) {
+    const target = this.raw
+    // 与 ITERATE_KEY 建立响应联系
+    track(target, ITERATE_KEY)
+    // callback 回调函数接收的数据也要为可响应的
+    const wrap = (val) => typeof val === 'object' ? reactive(val) : val
+    target.forEach((v, k) => {
+      // 通过 .call 调用 callback，并传递 thisArg
+      callback.call(thisArg, wrap(v), wrap(k), this)
+    })
+  },
+  // 迭代器方法
+  [Symbol.iterator]() {
+    const target = this.raw
+    const itr = target[Symbol.iterator]()
+    return itr
   }
 }
 
@@ -197,7 +194,9 @@ function trigger(target, key, type, newVal) {
       effectsToRun.add(effectFn)
     }
   })
-  if (type === 'ADD' || type === 'DELETE') {
+
+  // 目标对象是 Map 类型的数据时，SET 类型的操作也要触发与 ITERATE_KEY 相关联的副作用函数重新执行
+  if (type === 'ADD' || type === 'DELETE' || (type === 'SET' && Object.prototype.toString.call(target) === '[object Map]')) {
     const iterateEffects = depsMap.get(ITERATE_KEY)
     iterateEffects && iterateEffects.forEach(effectFn => {
       if (effectFn !== activeEffect) {
@@ -420,33 +419,59 @@ function reactive(obj) {
 }
 
 //////////////////////////////////////////// 测试 ////////////////////////////////////////////
-// 测试污染原始数据
-const m = new Map()
-const p1 = reactive(m)
-const p2 = reactive(new Map())
-// 为 p1 设置一个键值对，值是代理对象 p2
-p1.set('p2', p2)
+// 1. Map 或 Set 类型本身就可以迭代（部署了 Symbol.iterator 方法）
+const m = new Map([
+  ['key1', 'value1'],
+  ['key2', 'value2'],
+])
+
+for (const [key, value] of m) {
+  console.log(key, value)
+}
+
+for (const [key, value] of m.entries()) {
+  console.log(key, value)
+}
+/**
+ * 输出：
+ * key1 value1
+ * key2 value2
+ */
+
+// 调用迭代器方法获取迭代器对象，手动调用 next 方法
+const itr = m[Symbol.iterator]()
+console.log(itr.next())
+console.log(itr.next())
+console.log(itr.next())
+console.log('m[Symbol.iterator] 等价于 m.entries', m[Symbol.iterator] === m.entries)
+/**
+ * 输出：
+ * { value: ['key1', 'value1'], done: false }
+ * { value: ['key2', 'value2'], done: false }
+ * { value: undefined, done: true }
+ * 
+ * 注意：m[Symbol.iterator] 等价于 m.entries
+ */
+
+
+// 2. 此时代理对象不可迭代
+const p = reactive(new Map([
+  ['key1', 'value1'],
+  ['key2', 'value2'],
+]))
 
 effect(() => {
-  // 通过原始数据 m 访问 p2
-  console.log(m.get('p2').size)
-})
-
-setTimeout(() => {
-  // 通过原始数据 m 为 p2 设置一个键值对 foo-->1
-  m.get('p2').set('foo', 1)
+  for (const [key, value] of p) {
+    console.log(key, value)
+  }
 })
 
 /**
- * 输出结果：
- * 0
- * 1
+ * 错误：TypeError: p is not iterable
  * 
- * 问题：通过原始对象 m 设置数据值，触发了副作用函数重新执行。而原始数据不应该具备响应式数据的能力！！！
- * 数据污染：把响应式数据设置到原始数据上
- * 解决：在调用 target.set 函数设置值之前，对值进行检查：如果值是响应式数据，则通过 raw 属性获取原始值，再把原始数据设置到 target 上
+ * 前置知识：一个对象是否可迭代，取决于该对象是否实现了迭代协议，如果一个对象实现了 Symbol.iterator 方法，那么它就是可迭代的。
  * 
- * 解决后输出：
- * 0
+ * 解决：为代理对象实现迭代器方法
+ * 1. 从代理对象 p 读取 [Symbol.iterator] 属性，触发 get 拦截函数
+ * 2. 实现内部调用原始数据对象的迭代器方法：target[Symbol.iterator]()
  */
-
