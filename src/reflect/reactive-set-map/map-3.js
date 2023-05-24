@@ -7,7 +7,10 @@
  * 2. keys
  * 3. values
  * 
- * 注意：Map 或 Set 类型本身部署了 Symbol.iterator 方法，所以可以使用 for...of 进行迭代。
+ * 注意：
+ * 1. Map 或 Set 类型本身部署了 Symbol.iterator 方法，所以可以使用 for...of 进行迭代。
+ * 2. entries 等价于 [Symbol.iterator] 方法
+ * 3. 抽离出一个独立的函数：iterationMethod
  */
 
 let activeEffect
@@ -132,24 +135,29 @@ const mutableInstrumentations = {
     })
   },
   // 迭代器方法
-  [Symbol.iterator]() {
-    const target = this.raw
-    const itr = target[Symbol.iterator]()
-    track(target, ITERATE_KEY)
-    // 直接返回原始的迭代器
-    // return itr
-    // 迭代产生的值也是可以被代理的，则将其包装成响应式数据
-    const wrap = (value) => typeof value === 'object' && value !== null ? reactive(value) : value
-    // 返回自定义的迭代器
-    return {
-      next() {
-        const { value, done } = itr.next()
-        return {
-          // 如果 value 不是 undefined，则对其进行包裹
-          value: value ? [wrap(value[0]), wrap(value[1])] : value,
-          done
-        }
+  [Symbol.iterator]: iterationMethod,
+  entries: iterationMethod
+}
+
+// 抽离为独立的函数，便于复用（entries 等价于 [Symbol.iterator]）
+function iterationMethod() {
+  const target = this.raw
+  const itr = target[Symbol.iterator]()
+  const wrap = val => typeof val === 'object' ? reactive(val) : val
+  track(target, ITERATE_KEY)
+
+  return {
+    next() {
+      const { value, done } = itr.next()
+
+      return {
+        value: value ? [wrap(value[0]), wrap(value[1])] : value,
+        done
       }
+    },
+    // 实现可迭代协议
+    [Symbol.iterator]() {
+      return this
     }
   }
 }
@@ -470,38 +478,43 @@ console.log('m[Symbol.iterator] 等价于 m.entries', m[Symbol.iterator] === m.e
  */
 
 
-// 2. 此时代理对象不可迭代
-const p = reactive(new Map([
-  ['key1', 'value1'],
-  ['key2', 'value2'],
+// 2. 测试迭代代理对象
+const key = { key: 1 }
+const value = new Set([1, 2, 3])
+const pp = reactive(new Map([
+  [key, value]
 ]))
 
 effect(() => {
-  for (const [key, value] of p) {
+  console.log('------------')
+  for (const [key, value] of pp.entries()) {
     console.log(key, value)
   }
 })
+pp.get(key).add(4)
+// value.add(4)
 
-const pp = reactive(new Set([1, 2, 3]))
-p.set('key1', pp)
 
-effect(() => {
-  console.log('--- pp ---')
-  console.log(pp.size)
-  console.log('--- pp ---')
-})
-  pp.add(4)
-
-setTimeout(() => {
-  console.log('reactive-----')
-}, 2000)
 
 /**
- * 错误：TypeError: p is not iterable
+ * 错误：TypeError: p.entries is not a function or its return value is not iterable
  * 
- * 前置知识：一个对象是否可迭代，取决于该对象是否实现了迭代协议，如果一个对象实现了 Symbol.iterator 方法，那么它就是可迭代的。
+ * 解析：
+ * 1. p.entries 返回的值是一个对象，带有 next 方法，但是不具有 Symbol.iterator 方法，因此不是一个可迭代对象
+ * 2. 可迭代协议：一个对象实现了 Symbol.iterator 方法
+ * 3. 迭代器协议：一个对象实现了 next 方法
  * 
- * 解决：为代理对象实现迭代器方法
- * 1. 从代理对象 p 读取 [Symbol.iterator] 属性，触发 get 拦截函数
- * 2. 实现内部调用原始数据对象的迭代器方法：target[Symbol.iterator]()
+ * 解决：为 p.entries 返回值实现可迭代迭代协议
  */
+
+// 一个对象可以同时实现可迭代协议和迭代器协议
+const obj = {
+  // 迭代器协议
+  next() {
+    // ...
+  },
+  // 可迭代协议
+  [Symbol.iterator]() {
+    return this
+  }
+}

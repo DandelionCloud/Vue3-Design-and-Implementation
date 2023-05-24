@@ -1,17 +1,15 @@
 /**
- * 【代理 Set 和 Map】- 处理 forEach
+ * 【代理 Set 和 Map】- values 与 keys 方法
  * 集合类型：Map/Set 以及 WeakMap/WeakSet
  * 
- * 集合类型的 forEach 方法类似于数组的 forEach方法，遍历 Map 数据的每一组键值对。
- * 接受一个回调函数和 callback 的 this 作为参数：
- * - 回调函数：接收3个参数，分别是值、键、原始 Map 对象
- * - thisArg：指定 callback 函数执行时的 this 值
+ * 集合类型的迭代器方法：
+ * 1. entries
+ * 2. keys
+ * 3. values
  * 
  * 注意：
- * 1. 遍历操作只与键值对的数量有关（任何修改 Map 对象键值对数量的操作都应该触发副作用函数重新执行）
- *    与数量相关时：副作用函数与 ITERATE_KEY 建立响应联系（普通对象的属性数量、Map 的键值对数量）
- * 2. forEach 方法遍历 Map 类型的数据时，既关心键，又关心值
- *    trigger 函数中
+ * 1. 使用 for...of 迭代 entries 时，得到 Map 数据的键值对
+ * 2. 使用 for...of 迭代 values 时，仅得到 Map 数据的值
  */
 
 let activeEffect
@@ -73,6 +71,7 @@ const arrayInstrumentations = {}
 
 // 自定义集合类型方法 mutableInstrumentations
 const mutableInstrumentations = {
+  // Set 的 add 方法
   add(key) {
     // this 指向代理对象，通过 raw 属性获取原始数据对象
     const target = this.raw
@@ -85,6 +84,7 @@ const mutableInstrumentations = {
     }
     return res
   },
+  // Set 的 delete 方法
   delete(key) {
     const target = this.raw
     const hadKey = target.has(key)
@@ -126,18 +126,87 @@ const mutableInstrumentations = {
     const target = this.raw
     // 与 ITERATE_KEY 建立响应联系
     track(target, ITERATE_KEY)
-    // 通过原始数据对象调用 forEach 方法，并把 callback 传递过去
-    /**
-     * 问题：传递给 callback 回调函数的参数是非响应式数据
-     * 解决：把可代理的值转换为响应式数据
-     */
+    // callback 回调函数接收的数据也要为可响应的
     const wrap = (val) => typeof val === 'object' ? reactive(val) : val
-    // target.forEach(callback)
-    // 实现深响应：手动调用 callback，用 wrap 函数包裹 value 和 key 后再传给 callback
     target.forEach((v, k) => {
       // 通过 .call 调用 callback，并传递 thisArg
       callback.call(thisArg, wrap(v), wrap(k), this)
     })
+  },
+  // 迭代器方法
+  [Symbol.iterator]: iterationMethod,
+  entries: iterationMethod,
+  values: valuesIterationMethod,
+  keys: keysIterationMethod
+}
+
+// 抽离为独立的函数，便于复用（entries 等价于 [Symbol.iterator]）
+function iterationMethod() {
+  const target = this.raw
+  // 通过 target[Symbol.iterator] 获取原始迭代器对象
+  const itr = target[Symbol.iterator]()
+  const wrap = val => typeof val === 'object' ? reactive(val) : val
+  track(target, ITERATE_KEY)
+
+  return {
+    next() {
+      const { value, done } = itr.next()
+
+      return {
+        value: value ? [wrap(value[0]), wrap(value[1])] : value,
+        done
+      }
+    },
+    // 实现可迭代协议
+    [Symbol.iterator]() {
+      return this
+    }
+  }
+}
+
+function valuesIterationMethod() {
+  const target = this.raw
+  // 通过 target.values 获取原始迭代器方法
+  const itr = target.values()
+  const wrap = val => typeof val === 'object' ? reactive(val) : val
+  track(target, ITERATE_KEY)
+
+  return {
+    next() {
+      const { value, done } = itr.next()
+      return {
+        value: wrap(value), // value 是值
+        done
+      }
+    },
+    // 实现可迭代协议
+    [Symbol.iterator]() {
+      return this
+    }
+  }
+}
+
+const MAP_KEY_ITERATOR_KEY = Symbol()
+function keysIterationMethod() {
+  const target = this.raw
+  // 通过 target.keys 获取原始迭代器方法
+  const itr = target.keys()
+  const wrap = val => typeof val === 'object' ? reactive(val) : val
+  // 调用 track 函数追踪依赖，在副作用函数与 MAP_KEY_ITERATOR_KEY 之间建立响应
+  track(target, MAP_KEY_ITERATOR_KEY)
+
+  return {
+    next() {
+      const { value, done } = itr.next()
+      return {
+        value: wrap(value),
+        done
+      }
+    },
+    // 实现可迭代协议
+    [Symbol.iterator]() {
+      return this
+    }
   }
 }
 
@@ -201,6 +270,15 @@ function trigger(target, key, type, newVal) {
   // 目标对象是 Map 类型的数据时，SET 类型的操作也要触发与 ITERATE_KEY 相关联的副作用函数重新执行
   if (type === 'ADD' || type === 'DELETE' || (type === 'SET' && Object.prototype.toString.call(target) === '[object Map]')) {
     const iterateEffects = depsMap.get(ITERATE_KEY)
+    iterateEffects && iterateEffects.forEach(effectFn => {
+      if (effectFn !== activeEffect) {
+        effectsToRun.add(effectFn)
+      }
+    })
+  }
+  // 目标对象是 Map 类型的数据，且操作类型是 ADD 或者 DELETE 时，取出那些与 MAP_KEY_ITERATOR_KEY 相关联的副作用函数，添加到 effectsToRun 中待执行
+  if ((type === 'ADD' || type === 'DELETE') && Object.prototype.toString.call(target) === '[object Map]') {
+    const iterateEffects = depsMap.get(MAP_KEY_ITERATOR_KEY)
     iterateEffects && iterateEffects.forEach(effectFn => {
       if (effectFn !== activeEffect) {
         effectsToRun.add(effectFn)
@@ -422,61 +500,28 @@ function reactive(obj) {
 }
 
 //////////////////////////////////////////// 测试 ////////////////////////////////////////////
-// 测试 forEach 操作
-// 1. 遍历操作只与键值对的数量有关
+// 测试迭代 keys 方法的返回值
 const p = reactive(new Map([
-  [{ key: 1 }, { value: 1 }]
+  [{ key: 1 }, new Set([1, 2, 3])],
+  [2, 'value2']
 ]))
 
 effect(() => {
-  p.forEach(function (key, value) {
-    console.log(value)  // {value: 1}
-    console.log(key)  // {key: 1}
-  })
-})
-// 能够触发响应
-p.set({ key: 2 }, { value: 2 })
-
-// 2. 回调函数的参数是否为响应式数据问题
-const key = { key: 1 }
-const value = new Set([1, 2, 3])
-const pp = reactive(new Map([
-  [key, value]
-]))
-
-
-effect(() => {
-  pp.forEach(function (value, key) {
-    console.log(value.size) // 3
-  })
+  console.log('-----------')
+  for (const k of p.keys()) {
+    console.log(k)
+  }
 })
 
-setTimeout(() => {
-  console.log('--- 1s ---')
-  // 未能触发响应
-  pp.get(key).delete(1)
-}, 1000)
-
-setTimeout(() => {
-  console.log('--- 2s ---')
-  pp.set(key, new Set([1, 2, 3, 4, 56]))
-}, 2000)
+p.set('key2', 'value3') // ADD
+p.set('key2', 'value4') // SET
 
 /**
- * 输出结果：
- * 3
- * --- 1s ---
- *
- * 问题一：传递给 callback 的参数是原始对象，而非响应式数据对象，所以无法建立响应联系
- * 解决：手动调用 callback，将可代理的 value 和 key 使用 reactive 包装后传递给 callback
- *
- * 解决后输出：
- * 3
- * --- 1s ---
- * 2
- * --- 2s ---
- * 5
+ * 问题：两次设置同一个 key 两次触发响应
+ * 解析：keys 方法只关心 Map 类型数据的键的变化，不关心值的变化
+ * 解决：区分 keys 和 entries 方法，keys 只关心键，使用新的抽象键 MAP_KEY_ITERATOR_KEY 来收集依赖
  * 
- * 问题二：forEach 遍历时，不仅关心数量（键），还关心值
- * 解决：trigger 函数中触发与 ITERATE_KEY 关联的副作用函数重新执行时，增加判断 type === 'SET' && Object.prototype.toString.call(target) === '[object Map]'
+ * 分析：
+ * 1. ITERATE_KEY 收集依赖时，触发两次响应
+ * 2. MAP_KEY_ITERATOR_KEY 收集依赖时，SET 操作类型不触发响应
  */
