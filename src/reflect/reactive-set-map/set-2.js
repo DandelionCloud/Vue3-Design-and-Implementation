@@ -1,20 +1,15 @@
 /**
- * 【代理 Set 和 Map - 避免数据污染】- Map 对象的 get()、set()
+ * 【代理 Set 和 Map - 建立响应联系】- Set 数据对象的 size、delete()、add()
  * 集合类型：Map/Set 以及 WeakMap/WeakSet
  * 
- * 数据污染：将响应式数据设置到原始数据上的行为
- * 解决：在设置值之前进行判断，如果值是响应式数据，则通过 raw 属性获取其原始数据，然后再设置
- * const rawValue = value.raw || value
- * target.set(key, rawValue)
+ * 分析：
+ * 1. 访问 size 属性时，追踪依赖 ===> track 函数
+ * 2. add、delete 方法执行时，触发响应 ===> trigger 函数
  * 
- * 类似问题的遗留：
- * 1. Set 类型的 add 方法
- * 2. 普通对象的写值操作
- * 3. 为数组添加元素
+ * 优化：先判断新值是否存在于集合中
+ *  - add：只有当新值不存在集合时，才触发响应
+ *  - delete：只有当值存在时，才触发响应
  * 
- * 
- * 缺陷：通过 raw 属性来获取代理对象的原始数据
- * 严谨：使用唯一的标识来作为访问原始数据的键（如 Symbol）
  */
 
 let activeEffect
@@ -75,13 +70,20 @@ const arrayInstrumentations = {}
   })
 
 // 自定义集合类型方法 mutableInstrumentations
+// 其中包括自定义实现的 Set 和 Map 类型的方法
 const mutableInstrumentations = {
   add(key) {
     // this 指向代理对象，通过 raw 属性获取原始数据对象
     const target = this.raw
-    // 先判断值是否存在于集合中
+    /**
+     * 1. 通过原始数据对象执行 add 方法，添加具体值
+     * 2. 函数作为一个对象的方法来调用，this 指向这个对象 ===> target.add(key) 执行时 this 指向 target
+     * 3. add 作为一种操作，需要触发响应
+     * 优化：
+     * 1. 先判断值是否已存在
+     * 2. 只有在值不存在的情况下，才需要触发响应
+     */
     const hadKey = target.has(key)
-    // 通过原始数据对象执行方法，此时该方法中的 this 指向原始数据对象 target，此时不需要 bind 来改变 this 指向了
     const res = target.add(key)
     if (!hadKey) {
       trigger(target, key, 'ADD')
@@ -92,54 +94,12 @@ const mutableInstrumentations = {
     const target = this.raw
     const hadKey = target.has(key)
     const res = target.delete(key)
+    // 当要删除的元素确实存在时，才触发响应
     if (hadKey) {
       trigger(target, key, 'DELETE')
     }
     return res
   },
-  // Map 的 get 方法
-  get(key) {
-    // 获取原始对象
-    const target = this.raw
-    // 判读读取 key 是否存在
-    const had = target.has(key)
-    // 追踪依赖，建立响应联系
-    track(target, key)
-    /**
-     * 1. 如果存在，则返回结果
-     * 2. 注意：如果此时的 res 仍然是可代理数据，则需要返回使用 reactive 包装后的响应式数据（非浅响应情况）
-     */
-    if (had) {
-      const res = target.get(key)
-      return typeof res === 'object' ? reactive(res) : res
-    }
-  },
-  // Map 的 set 方法
-  set(key, value) {
-    const target = this.raw
-    const had = target.has(key)
-    // 获取旧值
-    const oldValue = target.get(key)
-    // 设置新值（此时直接把 value 设置到了原始数据上，可能导致原始数据被污染的问题）
-    /**
-     * 设置新值：
-     * （原始）数据污染：将响应式数据设置到原始数据上
-     * 解决：判断值是否为响应式数据，若是，则通过 raw 属性获取原始数据
-     */
-    // target.set(key, value)
-    const rawValue = value.raw || value
-    target.set(key, rawValue)
-    /**
-     * 1. 如果不存在，说明是 ADD 类型的操作，即新增
-     * 2. 如果存在，且值变了，则是 SET 类型的操作，即修改
-     * 3. ADD 类型的操作会对数据的 size 属性产生影响，任何依赖 size 属性的副作用函数都需要在 ADD 类型的操作发生时重新执行。
-     */
-    if (!had) {
-      trigger(target, key, 'ADD')
-    } else if (oldValue !== value || (oldValue === oldValue && value === value)) {
-      trigger(target, key, 'SET')
-    }
-  }
 }
 
 /**
@@ -152,13 +112,18 @@ const mutableInstrumentations = {
 function createReactive(obj, isShallow = false, isReadonly = false) {
   return new Proxy(obj, {
     get(target, key) {
+      // 如果读取的是 raw 属性，则返回原始数据对象 target
       if (key === 'raw') return target
       if (key === 'size') {
+        /**
+         * 1. 调用 track 函数建立响应联系
+         * 2. 类似于数组的 length 属性，但 Set 和 Map 都有 size 属性，且与当前已实现的任何新增、删除与 ITERATE_KEY 建立的联系相同
+         * 3. 任何新增、删除操作都会影响 size 属性，所以响应联系要建立在副作用函数和 ITERATE_KEY 之间
+         */
         track(target, ITERATE_KEY)
-        // 只有 Set 类型的数据上有 [[SetData]] 内部槽，使用 receiver 来指定 this
         return Reflect.get(target, key, target)
       }
-      // 返回定义在 mutableInstrumentations 对象下的方法
+      // 返回定义在 mutableinstrumentation 对象下的方法
       return mutableInstrumentations[key]
     }
   })
@@ -198,6 +163,7 @@ function trigger(target, key, type, newVal) {
       effectsToRun.add(effectFn)
     }
   })
+  // 当操作类型 type 为 ADD 或 DELETE 时，会取出与 ITERATE_KEY 相关联的副作用函数并执行
   if (type === 'ADD' || type === 'DELETE') {
     const iterateEffects = depsMap.get(ITERATE_KEY)
     iterateEffects && iterateEffects.forEach(effectFn => {
@@ -421,33 +387,15 @@ function reactive(obj) {
 }
 
 //////////////////////////////////////////// 测试 ////////////////////////////////////////////
-// 测试污染原始数据
-const m = new Map()
-const p1 = reactive(m)
-const p2 = reactive(new Map())
-// 为 p1 设置一个键值对，值是代理对象 p2
-p1.set('p2', p2)
+
+// 测试 Set 类型数据的响应触发
+const p = reactive(new Set([1, 2, 4]))
 
 effect(() => {
-  // 通过原始数据 m 访问 p2
-  console.log(m.get('p2').size)
+  console.log('size-', p.size)
 })
 
-setTimeout(() => {
-  // 通过原始数据 m 为 p2 设置一个键值对 foo-->1
-  m.get('p2').set('foo', 1)
-})
-
-/**
- * 输出结果：
- * 0
- * 1
- * 
- * 问题：通过原始对象 m 设置数据值，触发了副作用函数重新执行。而原始数据不应该具备响应式数据的能力！！！
- * 数据污染：把响应式数据设置到原始数据上
- * 解决：在调用 target.set 函数设置值之前，对值进行检查：如果值是响应式数据，则通过 raw 属性获取原始值，再把原始数据设置到 target 上
- * 
- * 解决后输出：
- * 0
- */
-
+p.add('wu')
+p.add(4)  // 不触发响应
+p.delete(4)
+p.delete(3) // false 不触发响应

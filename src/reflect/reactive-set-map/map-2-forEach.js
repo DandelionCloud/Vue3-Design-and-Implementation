@@ -76,9 +76,10 @@ const mutableInstrumentations = {
   add(key) {
     // this 指向代理对象，通过 raw 属性获取原始数据对象
     const target = this.raw
+    // 先判断值是否存在于集合中
+    const hadKey = target.has(key)
     // 通过原始数据对象执行方法，此时该方法中的 this 指向原始数据对象 target，此时不需要 bind 来改变 this 指向了
     const res = target.add(key)
-    const hadKey = target.has(key)
     if (!hadKey) {
       trigger(target, key, 'ADD')
     }

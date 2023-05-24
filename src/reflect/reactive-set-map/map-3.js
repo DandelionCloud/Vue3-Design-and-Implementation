@@ -73,9 +73,10 @@ const mutableInstrumentations = {
   add(key) {
     // this 指向代理对象，通过 raw 属性获取原始数据对象
     const target = this.raw
+    // 先判断值是否存在于集合中
+    const hadKey = target.has(key)
     // 通过原始数据对象执行方法，此时该方法中的 this 指向原始数据对象 target，此时不需要 bind 来改变 this 指向了
     const res = target.add(key)
-    const hadKey = target.has(key)
     if (!hadKey) {
       trigger(target, key, 'ADD')
     }
@@ -134,7 +135,22 @@ const mutableInstrumentations = {
   [Symbol.iterator]() {
     const target = this.raw
     const itr = target[Symbol.iterator]()
-    return itr
+    track(target, ITERATE_KEY)
+    // 直接返回原始的迭代器
+    // return itr
+    // 迭代产生的值也是可以被代理的，则将其包装成响应式数据
+    const wrap = (value) => typeof value === 'object' && value !== null ? reactive(value) : value
+    // 返回自定义的迭代器
+    return {
+      next() {
+        const { value, done } = itr.next()
+        return {
+          // 如果 value 不是 undefined，则对其进行包裹
+          value: value ? [wrap(value[0]), wrap(value[1])] : value,
+          done
+        }
+      }
+    }
   }
 }
 
@@ -465,6 +481,20 @@ effect(() => {
     console.log(key, value)
   }
 })
+
+const pp = reactive(new Set([1, 2, 3]))
+p.set('key1', pp)
+
+effect(() => {
+  console.log('--- pp ---')
+  console.log(pp.size)
+  console.log('--- pp ---')
+})
+  pp.add(4)
+
+setTimeout(() => {
+  console.log('reactive-----')
+}, 2000)
 
 /**
  * 错误：TypeError: p is not iterable
