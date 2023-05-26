@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@vue/reactivity": "^3.3.4",
     "vite": "^4.3.5"
   }
 }
