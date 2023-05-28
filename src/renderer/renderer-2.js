@@ -83,8 +83,8 @@ function createRenderer() {
 const renderer2 = createRenderer()
 /**
  * 调用渲染器的 renderer.render 函数执行渲染
- * 1. 首次调用 renderer.render 函数时，只需要创建新的 DOM 元素，只设计挂载
- * 2. 多次调用 renderer.render 函数，还需要更新，设计挂载和更新
+ * 1. 首次调用 renderer.render 函数时，只需要创建新的 DOM 元素，只涉及挂载
+ * 2. 多次调用 renderer.render 函数，还需要更新，涉及挂载和更新
  * - patch：打补丁（更新），使用 newVnode 与 oldVnode 进行比较，找到并更新变更点。
  * - 挂载本身也是一种特殊的打补丁，特殊在于旧的 oldVnode 不存在。
  */
