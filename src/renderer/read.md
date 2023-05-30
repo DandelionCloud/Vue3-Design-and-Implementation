@@ -453,7 +453,7 @@ function patchElement(n1, n2) {
 
 ```js
 function patchElement(n1, n2) {
-    const el = n1.el = n2.el
+    const el = n2.el = n1.el
     // 更新 props 
     const oldProps = n1.props
     const newProps = n2.props
@@ -509,10 +509,8 @@ function patchChildren(n1, n2, container) {
             n1.children.forEach(child => unmount(child))
         }
         setElementText(container, n2.children)
-    }
-
-    // 新子节点是一组子节点
-    if (Array.isArray(n2.children)) {
+    } else if (Array.isArray(n2.children)) {
+        // 新子节点是一组子节点
         if (Array.isArray(n1.children)) {
             // 旧子节点也是一组字节时
             // !!! Diff 算法，第九章详解 !!!

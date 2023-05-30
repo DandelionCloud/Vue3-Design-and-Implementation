@@ -124,7 +124,7 @@ function createRenderer(options) {
      * @param {*} n2 新节点
      */
     function patchElement(n1, n2) {
-        const el = n1.el = n2.el
+        const el = n2.el = n1.el
         const oldProps = n1.props
         const newProps = n2.props
         // 更新 props 
@@ -168,7 +168,7 @@ function createRenderer(options) {
          * 1. 旧子节点是一组子节点 ===> 涉及核心 Diff 算法
          * 2. 旧子节点为空和文本情况，清空容器，逐个挂载新子节点
          */
-        if (Array.isArray(n2.children)) {
+        else if (Array.isArray(n2.children)) {
             if (Array.isArray(n1.children)) {
                 // Diff 算法，第九章详解
             } else {
