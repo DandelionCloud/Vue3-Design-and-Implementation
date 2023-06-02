@@ -1,27 +1,33 @@
 /**
  * 【第 9 章 简单 Diff 算法】
- * [9.1 DOM 复用与 key 的作用]
+ * [9.2 DOM 复用与 key 的作用]
  * 
+ * 【Diff 算法】
  * 当新旧 vnode 的子节点都是一组节点时，为了以最小的性能开销完成更新操作，需要比较两组子节点，用于比较的算法就叫做 Diff 算法。
  * 
- * Diff 算法：存在于 patchChildren 函数
  *
  * 注意：
  * 1. 只关心新旧虚拟节点都存在一组子节点的情况
- * 2. DOM 可复用并不意味着不需要更新
+ * 2. 存在于 patchChildren 函数中
+ *    render ---> patch/unmount 
+ *    patch ---> mountElement/patchElement 
+ *    patchElement ---> patchProps/patchChildren
+ * 3. 重点请关注 patchChildren 函数的 
+        else if (Array.isArray(n2.children)) {
+            if (Array.isArray(n1.children)) {
+                // Diff 算法核心代码
+            }
+        }
  * 
- * 确定存在可复用的节点时，移动来完成更新：
- * 1. 引入额外的 key 来作为 vnode 的标识。
- * 2. 可复用 ===> type 与 key 都相同
- * 3. 可复用的节点仍需要进行打补丁操作 ===> 移动之前先完成打补丁操作
+ * 问题一：如何确定存在可复用的节点？
+ * 解决：
+ * 1. 引入额外的 key 来作为 vnode 的标识
+ * 2. 如果新旧子节点的 type 与 key 属性值都相同，则说明节点可复用
+ * 
+ * 注意：DOM 可复用并不意味着不需要更新，可复用的节点仍需要进行打补丁操作
  */
 
-///////////////////////////////////////////// 封装 - createRenderer ////////////////////////////////////////////////
-/**
- * createRender 函数，用来创建一个渲染器
- * @param {*} options 独立于平台的 API 配置项
- * @returns 
- */
+// createRender 函数，用来创建一个渲染器，其中 options 参数是独立于平台的 API 配置项
 function createRenderer(options) {
     const {
         createElement,
@@ -31,19 +37,15 @@ function createRenderer(options) {
         createText,
         setText
     } = options
-    // 文本节点的 type 标识
-    const Text = Symbol()
-    // 注释节点的 type 标识
-    const Comment = Symbol()
 
+    const Text = Symbol()   // 文本节点的 type 标识
+    const Comment = Symbol()    // 注释节点的 type 标识
 
     function render(vnode, container) {
         if (vnode) {
             patch(container._vnode, vnode, container)
         } else {
-            // 没有要渲染的内容，且存在旧 vnode 时，执行卸载
             if (container._vnode) {
-                // 调用 unmount 函数卸载 vnode
                 unmount(container._vnode)
             }
         }
@@ -74,7 +76,7 @@ function createRenderer(options) {
     }
 
     /**
-     * 打补丁
+     * 打补丁（更新操作）
      * @param {*} n1 旧 vnode
      * @param {*} n2 新 vnode
      * @param {*} container 容器
@@ -137,7 +139,7 @@ function createRenderer(options) {
     }
 
     /**
-     * 更新子节点函数
+     * 更新节点，使用新旧虚拟节点对真实元素进行更新
      * @param {*} n1 旧节点
      * @param {*} n2 新节点
      */
@@ -161,9 +163,11 @@ function createRenderer(options) {
     }
 
     /**
+     * 更新子节点函数，使用新旧虚拟节点的子节点 children 进行比较更新
      * @param {*} n1 旧节点
      * @param {*} n2 新节点
      * @param {*} container 容器
+     * 
      * 判断新节点的子节点类型
      * 1. 文本节点
      * 2. 一组子节点
@@ -182,34 +186,19 @@ function createRenderer(options) {
         else if (Array.isArray(n2.children)) {
             if (Array.isArray(n1.children)) {
                 /**
-                 * 简单 Diff 算法
-                 * 1. 遍历长度较短的那一组子节点，调用 patch 进行更新
-                 * 2. 如果新子节点更长，则挂载；如果旧子节点更长，则卸载
+                 * 新旧节点都有一组子节点时，使用 Diff 算法更新：
+                 * 1. 找到可复用（type 与 key 属性值均相同）的元素，并打补丁 patch
                  */
                 const oldChildren = n1.children
                 const newChildren = n2.children
-                // const oldLen = oldChildren.length
-                // const newLen = newChildren.length
-                // const commonLength = Math.min(oldLen, newLen)
-
-                // for (let i = 0; i < commonLength; i++) {
-                //     patch(oldChildren[i], newChildren[i], container)
-                // }
-                // if (oldLen > newLen) {
-                //     for (let i = commonLength; i < oldLen; i++) {
-                //         unmount(oldChildren[i])
-                //     }
-                // } else if (oldLen < newLen) {
-                //     for (let i = commonLength; i < newLen; i++) {
-                //         patch(null, newChildren[i], container)
-                //     }
-                // }
+                // 遍历新的 children 
                 for (let i = 0; i < newChildren.length; i++) {
                     const newVNode = newChildren[i]
+                    // 遍历旧的 children
                     for (let j = 0; j < oldChildren.length; j++) {
                         const oldVNode = oldChildren[j]
-                        // 如果找到了具有相同的 key 值得两个节点，说明可以复用，仍然需要调用 patch 函数更新
-                        if (newVNode.key === oldVNode.key) {
+                        // 找可复用的元素，并调用 patch 函数更新
+                        if (newVNode.key === oldVNode.key && newVNode.type === oldVNode.type) {
                             patch(oldVNode, newVNode, container)
                             break
                         }
@@ -245,6 +234,7 @@ function createRenderer(options) {
  * @param {*} key 属性名
  * @param {*} value 属性值
  * @returns 
+ * 
  * 1. 特殊处理具有 form 属性的表单元素，只能用 setAttribute 函数设置
  * 2. 兜底使用 DOM Properties 设置
  */
@@ -257,6 +247,7 @@ function shouldSetAsProps(el, key, value) {
  * 封装 unmount 函数，用来卸载元素
  * @param {*} vnode 虚拟节点
  * @returns 
+ * 
  * 1. 根据 vnode 获取要卸载的真实 DOM 元素
  * 2. 获取 el 的父元素
  * 3. 在父元素上调用 removeChild 移除元素
@@ -282,7 +273,6 @@ const renderer = createRenderer({
         return document.createElement(tag)
     },
     setElementText(el, text) {
-        console.log(el, text)
         el.textContent = text
     },
     insert(el, parent, anchor = null) {
@@ -353,46 +343,68 @@ const renderer = createRenderer({
     }
 })
 
+/////////////////////////////////////////// 推理 ///////////////////////////////////////////////////
+// oldChildren
+[
+    { type: 'p' },
+    { type: 'div' },
+    { type: 'span' }
+];
+// new Children
+[
+    { type: 'span' },
+    { type: 'p' },
+    { type: 'div' }
+]
 
-/////////////////// 测试 /////////////////////
-const vnode1 = {
-    type: 'div',
-    children: [
-        { type: 'p', children: 'Hello' }
-    ],
-    props: {
-        id: 'foo',
-        /**
-         * 1. 事件可以视为一种特殊的属性
-         * 2. 约定以 on 开头的属性视作事件
-         */
-        onClick: () => {
-            alert('clicked')
-        }
-    }
-}
+/**
+ * 解析：使用上一节介绍的算法完成上述两组子节点的更新时，需要 6 次 DOM 操作：
+ * 1. 比较旧子节点 { type: 'p' } 与新子节点 { type: 'span' }，标签不同，则卸载旧子节点，挂载新子节点 ===> 2 次 DOM 操作
+ * 2. 同上，卸载旧子节点 { type: 'div' }，挂载新子节点 { type: 'p' } ===> 2 次 DOM 操作
+ * 2. 同上，卸载旧子节点 { type: 'span' }，挂载新子节点 { type: 'div' } ===> 2 次 DOM 操作
+ * 
+ * 结论：新旧子节点仅仅是顺序不同，通过 DOM 移动来完成更新，性能更优
+ * 
+ * 问题：如何确定存在可复用的节点？
+ */
 
-const oldVNode = {
-    type: 'div',
-    children: [
-        { type: 'p', children: '1', key: 1 },
-        { type: 'p', children: '2', key: 2 },
-        { type: 'p', children: 'hello', key: 3 }
-    ]
-}
+// oldChildren 
+[
+    { type: 'p', children: '1' },
+    { type: 'p', children: '2' },
+    { type: 'p', children: '3' }
+];
+// newChildren 
+[
+    { type: 'p', children: '3' },
+    { type: 'p', children: '1' },
+    { type: 'p', children: '2' }
+]
 
-const newVNode = {
-    type: 'div',
-    children: [
-        { type: 'p', children: 'world', key: 3 },
-        { type: 'p', children: '1', key: 1 },
-        { type: 'p', children: '2', key: 2 }
-    ]
-}
+/**
+ * 确定可复用的节点：仅仅通过 vnode.type 的值相同来判断，无法确定新旧两组子节点的节点的对应关系。
+ * 
+ * 解决：引入额外的 key 来作为 vnode 的标识
+ */
+// oldChildren 
+[
+    { type: 'p', children: '1', key: 1 },
+    { type: 'p', children: '2', key: 2 },
+    { type: 'p', children: '3', key: 3 }
+];
+// newChildren 
+[
+    { type: 'p', children: '3', key: 3 },
+    { type: 'p', children: '1', key: 1 },
+    { type: 'p', children: '2', key: 2 }
+]
 
-// 首次挂载
-renderer.render(oldVNode, document.querySelector('#app'))
-setTimeout(() => {
-    // 1 秒钟后更新
-    renderer.render(newVNode, document.querySelector('#app'))
-}, 3000);
+/**
+ * 解析：
+ * 1. 引入 key 作为 vnode 的唯一标识
+ * 2. 当两个虚拟节点的 type 与 key 属性值都相同时，则节点相同，即 DOM 可复用
+ * 
+ * 注意：
+ * 1. DOM 可复用并不意味着不需要更新
+ * 2. 移动操作前，仍需要对两个虚拟节点进行打补丁操作，因为其文本子节点的内容变了
+ */

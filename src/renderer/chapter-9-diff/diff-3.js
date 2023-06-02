@@ -1,6 +1,6 @@
 /**
  * 【第 9 章 简单 Diff 算法】
- * [9.1 减少 DOM 操作的性能开销]
+ * [9.3 找到需要移动的元素]
  * 
  * 【Diff 算法】
  * 当新旧 vnode 的子节点都是一组节点时，为了以最小的性能开销完成更新操作，需要比较两组子节点，用于比较的算法就叫做 Diff 算法。
@@ -18,6 +18,18 @@
                 // Diff 算法核心代码
             }
         }
+ * 
+ * 问题一：如何确定存在可复用的节点？
+ * 解决：
+ * 1. 引入额外的 key 来作为 vnode 的标识
+ * 2. 如果新旧子节点的 type 与 key 属性值都相同，则说明节点可复用
+ * 
+ * 注意：DOM 可复用并不意味着不需要更新，可复用的节点仍需要进行打补丁操作
+ * 
+ * 问题二：如何判断一个节点是否需要移动？
+ * 解决：
+ * 1. 最大索引值 lastIndex：在旧 children 中找相同 key 值节点的过程中，遇到的最大索引值
+ * 2. 后续找寻过程中，遇到索引值比当前最大索引值小的节点，需要移动
  */
 
 // createRender 函数，用来创建一个渲染器，其中 options 参数是独立于平台的 API 配置项
@@ -30,7 +42,7 @@ function createRenderer(options) {
         createText,
         setText
     } = options
-    
+
     const Text = Symbol()   // 文本节点的 type 标识
     const Comment = Symbol()    // 注释节点的 type 标识
 
@@ -180,31 +192,31 @@ function createRenderer(options) {
             if (Array.isArray(n1.children)) {
                 /**
                  * 新旧节点都有一组子节点时，使用 Diff 算法更新：
-                 * 1. 遍历长度较短的那一组子节点，调用 patch 进行更新
-                 * 2. 如果新子节点更长，则挂载；如果旧子节点更长，则卸载
+                 * 1. 找到可复用（type 与 key 属性值均相同）的元素，并打补丁 patch
+                 * 2. 索引值小于当前最大索引值的节点需要移动
                  */
                 const oldChildren = n1.children
                 const newChildren = n2.children
-                const oldLen = oldChildren.length
-                const newLen = newChildren.length
-                // 两组子节点的公共长度
-                const commonLength = Math.min(oldLen, newLen)
-
-                for (let i = 0; i < commonLength; i++) {
-                    patch(oldChildren[i], newChildren[i], container)
-                }
-                // 新的一组子节点数量更多，有新子节点需要挂载
-                if (newLen > oldLen) {
-                    for (let i = commonLength; i < newLen; i++) {
-                        patch(null, newChildren[i], container)
+                // 用来存储寻找过程中遇到的最大索引值
+                let lastIndex = 0
+                // 遍历新的 children 
+                for (let i = 0; i < newChildren.length; i++) {
+                    const newVNode = newChildren[i]
+                    // 遍历旧的 children
+                    for (let j = 0; j < oldChildren.length; j++) {
+                        const oldVNode = oldChildren[j]
+                        // 找可复用的元素，并调用 patch 函数更新
+                        if (newVNode.key === oldVNode.key && newVNode.type === oldVNode.type) {
+                            patch(oldVNode, newVNode, container)
+                            if (j < lastIndex) {
+                                // 该节点对应的真实 DOM 元素需要移动
+                            } else {
+                                lastIndex = j
+                            }
+                            break
+                        }
                     }
                 }
-                // 旧的一组子节点数量更多，有旧子节点需要卸载
-                else if (oldLen > newLen) {
-                    for (let i = commonLength; i < oldLen; i++) {
-                        unmount(oldChildren[i])
-                    }
-                }  
             } else {
                 setElementText(container, '')
                 n2.children.forEach(child => patch(null, child, container))
@@ -344,62 +356,106 @@ const renderer = createRenderer({
     }
 })
 
-
 /////////////////////////////////////////// 推理 ///////////////////////////////////////////////////
 
+/**
+ * 如下为例说明：
+    // oldChildren
+    [
+        { type: 'p' },
+        { type: 'div' },
+        { type: 'span' }
+    ];
+    // new Children
+    [
+        { type: 'span' },
+        { type: 'p' },
+        { type: 'div' }
+    ]
+
+ * 解析：使用上一节介绍的算法完成上述两组子节点的更新时，需要 6 次 DOM 操作：
+ * 1. 比较旧子节点 { type: 'p' } 与新子节点 { type: 'span' }，标签不同，则卸载旧子节点，挂载新子节点 ===> 2 次 DOM 操作
+ * 2. 同上，卸载旧子节点 { type: 'div' }，挂载新子节点 { type: 'p' } ===> 2 次 DOM 操作
+ * 2. 同上，卸载旧子节点 { type: 'span' }，挂载新子节点 { type: 'div' } ===> 2 次 DOM 操作
+ * 
+ * 结论：新旧子节点仅仅是顺序不同，通过 DOM 移动来完成更新，性能更优
+ * 
+ * 问题：如何确定存在可复用的节点？
+ */
+
+/**
+ * 如下为例说明：
+    // oldChildren 
+    [
+        { type: 'p', children: '1' },
+        { type: 'p', children: '2' },
+        { type: 'p', children: '3' }
+    ];
+    // newChildren 
+    [
+        { type: 'p', children: '3' },
+        { type: 'p', children: '1' },
+        { type: 'p', children: '2' }
+    ]
+
+ * 确定可复用的节点：仅仅通过 vnode.type 的值相同来判断，无法确定新旧两组子节点的节点的对应关系。
+ * 
+ * 解决：引入额外的 key 来作为 vnode 的标识，如下：
+    // oldChildren 
+    [
+        { type: 'p', children: '1', key: 1 },
+        { type: 'p', children: '2', key: 2 },
+        { type: 'p', children: '3', key: 3 }
+    ];
+    // newChildren 
+    [
+        { type: 'p', children: '3', key: 3 },
+        { type: 'p', children: '1', key: 1 },
+        { type: 'p', children: '2', key: 2 }
+    ]
+
+ * 解析：
+ * 1. 引入 key 作为 vnode 的唯一标识
+ * 2. 当两个虚拟节点的 type 与 key 属性值都相同时，则节点相同，即 DOM 可复用
+ * 
+ * 注意：
+ * 1. DOM 可复用并不意味着不需要更新
+ * 2. 移动操作前，仍需要对两个虚拟节点进行打补丁操作，因为其文本子节点的内容变了
+ */
+
+
+/////////////////////////////////////////// 测试 ///////////////////////////////////////////////////
 const oldVNode = {
     type: 'div',
     children: [
-        { type: 'p', children: '1' },
-        { type: 'p', children: '2' },
-        { type: 'p', children: '3' },
+        { type: 'p', children: '1', key: 1 },
+        { type: 'p', children: '2', key: 2 },
+        { type: 'p', children: 'hello', key: 3 }
     ]
 }
+
 const newVNode = {
     type: 'div',
     children: [
-        { type: 'p', children: '4' },
-        { type: 'p', children: '5' },
-        { type: 'p', children: '6' },
+        { type: 'p', children: 'world', key: 3 },
+        { type: 'p', children: '1', key: 1 },
+        { type: 'p', children: '2', key: 2 }
     ]
 }
+
+// 首次挂载
+renderer.render(oldVNode, document.querySelector('#app'))
+setTimeout(() => {
+    // 1 秒钟后更新
+    renderer.render(newVNode, document.querySelector('#app'))
+}, 3000);
+
 
 /**
- * 解析：此时的新旧节点的子节点类型相同，且仅有 children 不一样，可直接遍历更新：
-    else if (Array.isArray(n2.children)) {
-        if (Array.isArray(n1.children)) {
-            const oldChildren = n1.children
-            const newChildren = n2.children
-            for (let i = 0; i < oldChildren.length; i++) {
-                // 调用 patch 函数逐个更新子节点
-                patch(oldChildren[i], newChildren[i], container)
-            }
-        }
-    }
- */
-
-const oldVNode2 = {
-    type: 'div',
-    children: [
-        { type: 'p', children: '1' },
-        { type: 'p', children: '2' },
-        { type: 'p', children: '3' },
-    ]
-}
-const newVNode2 = {
-    type: 'div',
-    children: [
-        { type: 'p', children: '4' },
-        { type: 'p', children: '5' },
-        { type: 'p', children: '6' },
-        { type: 'p', children: '7' },
-    ]
-}
-
-/**
- * 问题：新旧两组子节点的数量可能不同
- * 解决：
-    1. 遍历其中长度较短的一组
-    2. 如果新的一组子节点的数量多，则要挂载 mount 新子节点
-    3. 如果旧的一组子节点的数量多，则要卸载 unmount 旧子节点
+ * 解析：
+ * 1. 取第一个新子节点 key 为 3，尝试在旧子节点中找到相同 key 值的节点，找到了 oldVNode[2]，调用 patch 打补丁：
+ *      patch(oldVNode[2], newVNode[0], container) ===> 文本内容由 hello 变成了 world
+ * 2. 取第二个新子节点 key 为 1，尝试在旧子节点中找到相同 key 值的节点，找到了 oldVNode[0], 调用 patch 打补丁：
+ *      新旧子节点 newVNode[1] 与 oldVNode[0] 完全相同，不做改变
+ * 3. 取第三个新子节点 key 为 2，结果同上。
  */
