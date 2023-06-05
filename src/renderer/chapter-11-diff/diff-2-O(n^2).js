@@ -1,13 +1,8 @@
 /**
  * 【第 11 章 快速 Diff 算法】
- * [11.1 相同的前置元素和后置元素]
+ * [11.2 判断是否需要进行 DOM 移动操作]
  * 
- * 【快速 Diff 算法】
- * 最早应用于：ivi 和 inferno 框架
- * 
- * 预处理步骤：
- * 1. 借鉴了纯文本 Diff 算法的思路
- * 2. 找出两组子节点中具有的相同前置和后直接点 ===> 无需移动，仅进行打补丁操作
+ * 快速 Diff 算法的预处理过程：处理相同的前置节点和后置节点
  */
 
 // createRender 函数，用来创建一个渲染器，其中 options 参数是独立于平台的 API 配置项
@@ -173,7 +168,10 @@ function createRenderer(options) {
         // 新子节点是一组子节点
         else if (Array.isArray(n2.children)) {
             if (Array.isArray(n1.children)) {
-                // 封装 patchKeyedChildren 函数
+                /**
+                 * 【双端 Diff 算法】
+                 * 封装 patchKeyedChildren 函数
+                 */
                 patchKeyedChildren(n1, n2, container)
             } else {
                 setElementText(container, '')
@@ -261,6 +259,32 @@ function createRenderer(options) {
         else if (j <= oldEnd && j > newEnd) {
             while (j <= oldEnd) {
                 unmount(oldChildren[j++])
+            }
+        }
+        /**
+         * 处理非理想情况：
+         * source 数组：
+         * 1. 长度等于新的一组子节点经过预处理之后剩余未处理的节点数量
+         * 2. 存储上述新子节点在旧子节点中为位置索引，初始为 -1
+         * 3. 用来计算一个最长递增子序列，用于辅助完成 DOM 的移动操作
+         */
+        else {
+            const count = newEnd - j + 1
+            const source = new Array(count)
+            source.fill(-1)
+
+            const oldStart = j
+            const newStart = j
+            // 两层嵌套 ===> 时间复杂度为 O(n1*n2)
+            for (let i = oldStart; i <= oldEnd; i++) {
+                const oldVNode = oldChildren[i]
+                for (let k = newStart; k <= newEnd; k++) {
+                    const newVNode = newChildren[k]
+                    if (oldVNode.key === newVNode.key) {
+                        patch(oldVNode, newVNode, container)
+                        source[k - newStart] = i
+                    }
+                }
             }
         }
     }

@@ -1,13 +1,12 @@
 /**
  * 【第 11 章 快速 Diff 算法】
- * [11.1 相同的前置元素和后置元素]
+ * [11.3 如何移动元素]
  * 
- * 【快速 Diff 算法】
- * 最早应用于：ivi 和 inferno 框架
+ * 快速 Diff 算法的预处理过程：处理相同的前置节点和后置节点
  * 
- * 预处理步骤：
- * 1. 借鉴了纯文本 Diff 算法的思路
- * 2. 找出两组子节点中具有的相同前置和后直接点 ===> 无需移动，仅进行打补丁操作
+ * 问题：两层嵌套循环的时间复杂度为 O(n1*n2)
+ * 优化：构建索引表
+ * 1. 为新的一组子节点构建一张索引表，用来存储节点的 key 和节点位置索引之间的映射
  */
 
 // createRender 函数，用来创建一个渲染器，其中 options 参数是独立于平台的 API 配置项
@@ -173,7 +172,10 @@ function createRenderer(options) {
         // 新子节点是一组子节点
         else if (Array.isArray(n2.children)) {
             if (Array.isArray(n1.children)) {
-                // 封装 patchKeyedChildren 函数
+                /**
+                 * 【双端 Diff 算法】
+                 * 封装 patchKeyedChildren 函数
+                 */
                 patchKeyedChildren(n1, n2, container)
             } else {
                 setElementText(container, '')
@@ -263,6 +265,93 @@ function createRenderer(options) {
                 unmount(oldChildren[j++])
             }
         }
+        /**
+         * 处理非理想情况：
+         * j <= newEnd && j <= oldEnd
+         * source 数组：
+         * 1. 长度等于新的一组子节点经过预处理之后剩余未处理的节点数量
+         * 2. 存储上述新子节点在旧子节点中为位置索引，初始为 -1
+         * 3. 用来计算一个最长递增子序列，用于辅助完成 DOM 的移动操作
+         * 
+         * 新的一组子节点的索引表 keyIndex:
+         * 1. key - 新的一组子节点中未被处理的节点的 key 值
+         * 2. value - 新的一组子节点中为本处理的节点的在新子节点中的位置索引值（newIndex）
+         */
+        else {
+            // 1. 构建 source 数组
+            const count = newEnd - j + 1
+            const source = new Array(count)
+            source.fill(-1)
+
+            // 2. 填充 source
+            const oldStart = j
+            const newStart = j
+            // 构建索引表 keyIndex (key-index)
+            const keyIndex = {}
+            // 3. 判断节点是否需要移动（思路与简单 Diff 算法一致）
+            let moved = false
+            let pos = 0
+            for (let i = newStart; i <= newEnd; i++) {
+                keyIndex[newChildren[i].key] = i
+            }
+            // 代表更新过的节点数量
+            let patched = 0
+            // 一层嵌套 ===> 时间复杂度为 O(n)
+            for (let i = oldStart; i <= oldEnd; i++) {
+                const oldVNode = oldChildren[i]
+                // 如果更新过的节点数量小于等于需要更新的节点数量，则执行更新
+                if (patched <= count) {
+                    const k = keyIndex[oldVNode.key]
+                    if (typeof k !== 'undefined') {
+                        newVNode = newChildren[k]
+                        patch(oldVNode, newVNode, container)
+                        source[k - newStart] = i
+                        // 没更新一个节点，patched +1
+                        patched++
+                        // 判断节点是否需要移动
+                        // 疑问：此处不应该是使用旧子节点的 oldIndex i 吗 ？？？！！！
+                        if (k < pos) {
+                            moved = true
+                        } else {
+                            pos = k
+                        }
+                    } else {
+                        unmount(oldVNode)
+                    }
+                } else {
+                    unmount(oldVNode)
+                }
+            }
+
+            if (moved) {
+                // 计算出最长递增子序列，返回的是位置索引 
+                const seq = getSequence(source)
+                let s = seq.length - 1
+                let i = count - 1
+                for (i; i >= 0; i--) {
+                    if (source[i] === -1) {
+                        // 该节点是全新节点，要挂载  
+                        const pos = i + newStart
+                        const newVNode = newChildren[pos]
+                        const nextPos = pos + 1
+                        const anchor = nextPos < newChildren.length ? newChildren[nextPos].el : null
+                        patch(null, newVNode, contaienr, anchor)
+                    }
+                    else if (i !== seq[s]) {
+                        // 该节点需要移动
+                        const pos = i + newStart
+                        const newVNode = newChildren[pos]
+                        const nextPos = pos + 1
+                        const anchor = nextPos < newChildren.length ? newChildren[nextPos].el : null
+                        insert(newVNode.el, contaienr, anchor)
+                    } else {
+                        // 该节点不需要移动，s 指向下一个位置
+                        s--
+                    }
+                }
+            }
+
+        }
     }
 
     function hydrate(vnode, container) {
@@ -313,6 +402,48 @@ function unmount(vnode) {
     if (parent) {
         parent.removeChild(vnode.el)
     }
+}
+
+// 求解给定序列的最长递增子序列的方法（取自 Vue.js3）
+function getSequence(arr) {
+    const p = arr.slice()
+    const result = [0]
+    let i, j, u, v, c
+    const len = arr.length
+    for (i = 0; i < len; i++) {
+        const arrI = arr[i]
+        if (arrI !== 0) {
+            j = result[result.length - 1]
+            if (arr[j] < arrI) {
+                p[i] = j
+                result.push(i)
+                continue
+            }
+            u = 0
+            v = result.length - 1
+            while (u < v) {
+                c = ((u + v) / 2) | 0
+                if (arr[result[c]] < arrI) {
+                    u = c + 1
+                } else {
+                    v = c
+                }
+            }
+            if (arrI < arr[result[u]]) {
+                if (u > 0) {
+                    p[i] = result[u - 1]
+                }
+                result[u] = i
+            }
+        }
+    }
+    u = result.length
+    v = result[u - 1]
+    while (u-- > 0) {
+        result[u] = v
+        v = p[v]
+    }
+    return result
 }
 
 const renderer = createRenderer({
@@ -422,3 +553,6 @@ setTimeout(() => {
     renderer.render(newVNode, document.querySelector('#app'))
 }, 3000);
 
+const arr = [0, 6, 4, 12]
+const seq = getSequence(arr)
+console.log('seq', seq)
