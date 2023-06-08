@@ -290,6 +290,8 @@ function patchKeyedChildren(n1, n2, container) {
         else if (oldStartVNode.key === newEndVNode.key) {
             patch(oldStartVNode, newEndVNode, container)
             insert(oldStartVNode.el, container, oldEndVNode.el.nextSibling)
+            oldStartVNode = oldChildren[++oldStartIdx]
+            newEndVNode = newChildren[--newEndIdx]
         }
         // 旧子节点的尾部节点、新子节点的头部节点 key 值相同
         else if (oldEndVNode.key === newStartVNode.key) {
