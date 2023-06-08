@@ -224,7 +224,7 @@ function createRenderer(options) {
                     for (let j = 0; j < oldChildren.length; j++) {
                         const oldVNode = oldChildren[j]
                         // 找可复用的元素，并调用 patch 函数更新
-                        if (newVNode.key === oldVNode.key && newVNode.type === oldVNode.type) {
+                        if (newVNode.key === oldVNode.key) {
                             find = true
                             patch(oldVNode, newVNode, container)
                             if (j < lastIndex) {
@@ -521,3 +521,20 @@ setTimeout(() => {
  *      新旧子节点 newVNode[1] 与 oldVNode[0] 完全相同，不做改变
  * 3. 取第三个新子节点 key 为 2，结果同上。
  */
+
+const newVNode1 = {
+    type: 'p',
+    children: '1'
+}
+
+const oldVNode1 = {
+    type: 'p',
+    children: '1'
+}
+
+// 首次挂载
+renderer.render(oldVNode1, document.querySelector('#app'))
+setTimeout(() => {
+    // 1 秒钟后更新
+    renderer.render(newVNode1, document.querySelector('#app'))
+}, 3000);

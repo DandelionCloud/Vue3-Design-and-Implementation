@@ -221,7 +221,7 @@ function createRenderer(options) {
                     for (let j = 0; j < oldChildren.length; j++) {
                         const oldVNode = oldChildren[j]
                         // 找可复用的元素，并调用 patch 函数更新
-                        if (newVNode.key === oldVNode.key && newVNode.type === oldVNode.type) {
+                        if (newVNode.key === oldVNode.key) {
                             patch(oldVNode, newVNode, container)
                             if (j < lastIndex) {
                                 /**

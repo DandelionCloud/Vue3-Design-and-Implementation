@@ -8,6 +8,214 @@
 
 ## 简单 Diff 算法
 
+### 一、确定可复用节点（新的子节点出现在旧的字节点中）
+
+引入 `key` 来作为 `vnode` 的标识，只要两个虚拟节点的 `type` 属性值和 `key` 属性值都相同，则是相同的节点，可以进行 `DOM` 复用。
+
+注意：`DOM` 复用还是需要更新的，进行打补丁操作：
+
+```js
+if(newVNode.key === oldVNode.key) {
+    patch(oldVNode, newVNode, container)
+}
+```
+
+### 二、移动元素
+
+1、找到最大索引值
+
+最大索引值是，遍历一组子节点，在另一组子节点中寻找具有相同 `key` 值节点的过程中，遇到的此节点在另一组子节点中的索引值最大的一个。
+
+2、判断移动
+
+在后续的寻找过程中，存在索引值小于最大索引值的节点，该节点对应的真实元素需要移动。
+
+
+代码如下：
+```js
+// 用于存储寻找过程中遇到的最大索引值
+let lastIndex = 0
+for(let i = 0; i < newChildren.length; i++) {
+    const newVNode = newChildren[i]
+    for(let j = 0; j < oldChildren.length; j++) {
+        const oldVNode = oldChildren[j]
+        if(newVNode.key === oldVNode.key) {
+            patch(oldVNode, newVNode, container)
+            if(j < lastIndex) {
+                // 移动虚拟节点对应的真实元素
+            } else {
+                lastIndex = j
+            }
+            break
+        }
+    }
+}
+```
+
+上述两层 `for` 循环嵌套使用，时间复杂度为 `O(n^2)`，可以借鉴 *快速 `Diff` 算法* 中的优化方法，使用**索引表**。
+
+3、如何移动
+
+- 移动的是虚拟节点对应的真实 `DOM` 元素（`vnode.el`），并不是虚拟节点本身。
+
+    回顾 `patchElement` 函数：
+    ```js
+    function patchElement(n1, n2) {
+        const el = n2.el = n1.el
+        // ...
+    }
+    ```
+    其中，将旧节点的 `n1.el` 属性赋值给新节点的 `n2.el` 属性，这一赋值语句就是 `DOM` 元素的复用，此后，新节点也将持有对真实 `DOM` 元素的引用。
+
+- 新的 `children` 的顺序就是更新后真实 `DOM` 节点应有的顺序，所以，以新的子节点为基准，找到锚点元素：
+
+    ```js
+    const prevVNode = newChildren[i - 1]
+    if(prevVNode) {
+        const anchor = prevVNode.el.nextSibling
+        // insert 方法将 newVNode 对应的真实元素插入到锚点之前
+        insert(newVNode.el, container, anchor)
+    }
+
+    function insert(el, parent, anchor = null) {
+        parent.insertBefore(el, anchor)
+    }
+    ```
+
+    `insert` 函数：
+    - 使用浏览器原生的 `insertBefore` 函数，需要找到被插入节点的下一个兄弟元素作为锚点
+    - 所以需要找到被插入元素上一节点（`prevVNode`）对应真实元素（`.el`）的下一个兄弟节点（`.nextSibling`）作为锚点
+    - 如此，才可以保证被操作节点紧跟它的前一个节点，它们对应的真实元素也保持同样的位置顺序
+
+4、新增节点
+
+如果新的子节点在旧的一组子节点不存在相同 `key` 值的节点，则此节点为新增节点，需要挂载。挂载新增节点的位置与移动元素的位置处理是相同，紧跟前一个节点对应的真实元素之后。
+
+```js
+// 表示是否在旧的一组节点中的找到可复用的节点
+let find = false
+// ...
+if(newVNode.key === oldVNode.key) {
+    find = true
+}
+// 新增节点的挂载
+if(!find) {
+    const prevVNode = newChildren[i - 1]
+    let anchor = null
+    if(prevVNode) {
+        anchor = prevVNode.el.nextSibling
+    } else {
+        // 如果没有前一个 vnode，则说明是第一个节点，使用容器元素的 firstChild 作为锚点
+        anchor = container.fisrtChild
+    }
+    // 挂载
+    patch(null, newVNode, container, anchor)
+}
+```
+
+上述 `patch` 函数调用时，增加了第四个参数，即锚点元素，是用于挂载时，指定挂载位置的：
+
+```js
+function patch(n1, n2, container, anchor) {
+    // ...
+    if(!n1) {
+        mountElement(n2, container, anchor)
+    }
+    // ...
+}
+
+function mountElement(vnode, container, anchor) {
+    // ...
+    insert(el, container, anchor)
+}
+```
+
+5、移除不存在的元素
+
+当更新结束后，遍历旧的一组子节点，然后去新的一组子节点中寻找具有相同 key 值的节点。如果找不到，说明该节点需要删除：
+
+```js
+for (let i = 0; i < oldChildren.length; i++) {
+    const oldVNode = oldChildren[i]
+    const has = newChildren.find(vnode => vnode.key === oldVNode.key)
+    if(!has) {
+        unmount(oldVNode)
+    }
+}
+```
+
+代码整合：
+
+```js
+function patchChildren(n1, n2, container) {
+    // ...
+
+    // 新子节点是一组子节点
+    else if (Array.isArray(n2.children)) {
+        if (Array.isArray(n1.children)) {
+            /**
+             * 新旧节点都有一组子节点时，使用 Diff 算法更新：
+             * 1. 找到可复用（type 与 key 属性值均相同）的元素，并打补丁 patch
+             * 2. 索引值小于当前最大索引值的节点需要移动
+             * 3. 移动：紧跟前一个节点
+             * 4. 新增节点要挂载
+             * 5. 旧节点中多余的节点要卸载
+             */
+            const oldChildren = n1.children
+            const newChildren = n2.children
+            // 用来存储寻找过程中遇到的最大索引值
+            let lastIndex = 0
+            for (let i = 0; i < newChildren.length; i++) {
+                const newVNode = newChildren[i]
+                // 变量 find，表示是否在旧的一组子节点中找到可复用的节点，默认 false
+                let find = false
+                for (let j = 0; j < oldChildren.length; j++) {
+                    const oldVNode = oldChildren[j]
+                    if (newVNode.key === oldVNode.key) {
+                        find = true
+                        // 移动前先打补丁
+                        patch(oldVNode, newVNode, container)
+                        if (j < lastIndex) {
+                            // 移动元素
+                            const prevVNode = newChildren[i - 1]
+                            if (prevVNode) {
+                                const anchor = prevVNode.el.nextSibling
+                                insert(newVNode.el, container, anchor)
+                            }
+                        } else {
+                            lastIndex = j
+                        }
+                        break
+                    }
+                }
+                if (!find) {
+                    // 挂载新增节点
+                    const prevVNode = newChildren[i - 1]
+                    let anchor = null
+                    if (prevVNode) {
+                        anchor = prevVNode.el.nextSibling
+                    } else {
+                        anchor = container.firstChild
+                    }
+                    patch(null, newVNode, container, anchor)
+                }
+            }
+            // 卸载遗留旧子节点
+            for (let i = 0; i < oldChildren.length; i++) {
+                const oldVNode = oldChildren[i]
+                const has = newChildren.find(vnode => vnode.key === oldVNode.key && vnode.type === oldVNode.type)
+                if (!has) {
+                    unmount(oldVNode)
+                }
+            }
+        }
+    }
+    
+    // ...
+}
+```
+
+
 ## 双端 Diff 算法
 
 ## 快速 Diff 算法
