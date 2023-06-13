@@ -1,6 +1,6 @@
 /**
  * 第 12 章 组件的实现原理
- * [12.2 组件状态与自更新]
+ * [12.4 props 与组件的被动更新]
  * 
  * 有状态组件：
  * - 从用户角度来看，就是一个选项对象
@@ -9,6 +9,18 @@
  * 组件接口：
  * 1. 渲染函数 render 其返回值必须是虚拟 DOM（必须）
  * 2. 自身的状态：data 函数来定义（同时在渲染函数中，可以通过 this 访问该函数返回的状态数据）
+ * 3. props: 显式地指定组件接受哪些 props 数据
+ *
+ * 组件实例 instance：
+ * 1. 维护组件运行过程中的所有信息：
+ *  - 生命周期函数
+ *  - 渲染的子树 subTree
+ *  - 是否已经被挂载
+ *  - 自身的状态 data
+ * 2. 本质上：是一个状态集合（一个对象）
+ * 
+ * props 数据：本质上是父组件的数据，当 props发生变化时，会触发父组件重新渲染
+ * 子组件的被动更新：由父组件自更新引起的子组件的更新
  */
 import { effect, reactive } from '@vue/reactivity'
 
@@ -204,14 +216,10 @@ function createRenderer(options) {
     }
 
     /**
-     * patchKeyedChildren 函数，实现快速 Diff 算法
+     * patchKeyedChildren 函数，实现 Diff 算法
      * @param {*} n1 旧虚拟节点
      * @param {*} n2 新虚拟节点
      * @param {*} container 容器
-     * 
-     * 快速 Diff 算法思路：
-     * 
-     * 
      */
     function patchKeyedChildren(n1, n2, container) {
         const oldChildren = n1.children
@@ -368,24 +376,45 @@ function createRenderer(options) {
     // 组件的挂载
     function mountComponent(vnode, container, anchor) {
         const componentOptions = vnode.type
-        const { render, data } = componentOptions
-        // 调用 data 函数得到原始数据，并调用 reactive 函数将其包装为响应式数据
+        // 从组件选项对象中取得组件的生命周期函数
+        const { render, data, beforeCreate, created, beforeMount, mounted, beforeUpdate, updated, props: propsOption } = componentOptions
+        // 生命周期函数 beforeCreate 调用
+        beforeCreate && beforeCreate()
+
         const state = reactive(data())
-        /**
-         * 组件的自更新
-         * 1. 当组件自身状态发生变化时，自动重新执行渲染函数，完成更新
-         * 2.effect 的同步执行问题，如果多次修改响应式数据的值，将会导致渲染函数执行多次
-         *  解决：实现一个调度器，缓冲副作用函数到微任务队列
-         *  结果：无论对响应式数据进行多少次修改，副作用函数都只会重新执行一次
-         */
+        const [props, attrs] = resolveProps(propsOption, vnode.props)
+        const instance = {
+            state,
+            // 将解析出来的 props 数据包装为 shallowReactive 并定义到组件实例上
+            props: shallowReactive(props),
+            isMounted: false,
+            subTree: null
+        }
+        // 将组件实例设置到 vnode 上，用于后续更新
+        vnode.component = instance
+
+        // 生命周期函数 created 调用
+        created && created(state)
+
         effect(() => {
-            // 指定 this 并传递参数
             const subTree = render.call(state, state)
-            patch(null, subTree, container, anchor)
-        }, {
-            // 指定该副作用函数的调度器为 queueJob 即可
-            scheduler: queueJob
-        })
+            if (!vnode.isMounted) {
+                // 生命周期函数 beforeMount 调用
+                beforeMount && beforeMount().call(state)
+                patch(null, subTree, container, anchor)
+                instance.isMounted = true
+                // 生命周期函数 mounted 调用
+                mounted && mounted().call(state)
+            } else {
+                // 生命周期函数 beforeUpdate 调用
+                beforeUpdate && beforeUpdate().call(state)
+                patch(instance.subTree, subTree, container, anchor)
+                // 生命周期函数 updated 调用
+                updated && updated().call(state)
+            }
+            // 更新组件实例的子树
+            instance.subTree = subTree
+        }, { scheduler: queueJob })
     }
 
     // 任务缓存队列，用 Set 数据结果自动去重功能
@@ -412,6 +441,27 @@ function createRenderer(options) {
             })
         }
 
+    }
+
+    /**
+     * 解析组件 props 和 attrs 数据
+     * @param {*} options 组件定义的可接收的
+     * @param {*} propsData 组件接受到的
+     * @returns 
+     * 1. 没有定义在 MyComponent.props 选项中的 props 数据将存储到 attrs 对象中
+     * 2. 上述实现中还需包含默认值、类型校验等内容的处理
+     */
+    function resolveProps(options, propsData) {
+        const props = {}
+        const attrs = {}
+        for (const key in propsData) {
+            if (key in options) {
+                props[key] = propsData[key]
+            } else {
+                attrs[key] = propsData[key]
+            }
+        }
+        return [props, attrs]
     }
 
 
@@ -590,10 +640,14 @@ const renderer = createRenderer({
  * 
  * 1. 必须的接口：渲染函数，其返回值必须是虚拟 DOM
  * 2. 自身的状态：data 函数来定义（同时在渲染函数中，可以通过 this 访问该函数返回的状态数据）
- * 
+ * 3. 通过 props 显式地指定组件会接受哪些 props 数据
  */
 const MyComponent = {
     name: 'MyComponent',
+    // 接收 props
+    props: {
+        title: String
+    },
     // 定义组件自身的状态
     data() {
         return { foo: 1 }

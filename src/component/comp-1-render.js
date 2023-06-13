@@ -202,14 +202,10 @@ function createRenderer(options) {
     }
 
     /**
-     * patchKeyedChildren 函数，实现快速 Diff 算法
+     * patchKeyedChildren 函数，实现 Diff 算法
      * @param {*} n1 旧虚拟节点
      * @param {*} n2 新虚拟节点
      * @param {*} container 容器
-     * 
-     * 快速 Diff 算法思路：
-     * 
-     * 
      */
     function patchKeyedChildren(n1, n2, container) {
         const oldChildren = n1.children

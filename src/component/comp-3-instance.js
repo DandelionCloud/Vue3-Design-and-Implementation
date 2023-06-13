@@ -1,6 +1,6 @@
 /**
  * 第 12 章 组件的实现原理
- * [12.2 组件状态与自更新]
+ * [12.3 组件实例与组件的生命周期]
  * 
  * 有状态组件：
  * - 从用户角度来看，就是一个选项对象
@@ -9,6 +9,15 @@
  * 组件接口：
  * 1. 渲染函数 render 其返回值必须是虚拟 DOM（必须）
  * 2. 自身的状态：data 函数来定义（同时在渲染函数中，可以通过 this 访问该函数返回的状态数据）
+ * 
+ *
+ * 组件实例 instance：
+ * 1. 维护组件运行过程中的所有信息：
+ *  - 生命周期函数
+ *  - 渲染的子树 subTree
+ *  - 是否已经被挂载
+ *  - 自身的状态 data
+ * 2. 本质上：是一个状态集合（一个对象）
  */
 import { effect, reactive } from '@vue/reactivity'
 
@@ -369,23 +378,43 @@ function createRenderer(options) {
     function mountComponent(vnode, container, anchor) {
         const componentOptions = vnode.type
         const { render, data } = componentOptions
-        // 调用 data 函数得到原始数据，并调用 reactive 函数将其包装为响应式数据
         const state = reactive(data())
         /**
-         * 组件的自更新
-         * 1. 当组件自身状态发生变化时，自动重新执行渲染函数，完成更新
-         * 2.effect 的同步执行问题，如果多次修改响应式数据的值，将会导致渲染函数执行多次
-         *  解决：实现一个调度器，缓冲副作用函数到微任务队列
-         *  结果：无论对响应式数据进行多少次修改，副作用函数都只会重新执行一次
+         * 定义组件实例（本质上就是一个对象）包含与组件有关的状态信息:
+         * - state: 自身的状态数据，即 data
+         * - isMounted: 标识组件是否已被挂载，初始为 false
+         * - subTree: 组件所渲染的内容，即子树 subTree
+         * 注意：尽可能保持组件实例轻量，以减少内存占用
          */
+        const instance = {
+            state,
+            isMounted: false,
+            subTree: null
+        }
+        // 将组件实例设置到 vnode 上，用于后续更新
+        vnode.component = instance
+
         effect(() => {
-            // 指定 this 并传递参数
             const subTree = render.call(state, state)
-            patch(null, subTree, container, anchor)
-        }, {
-            // 指定该副作用函数的调度器为 queueJob 即可
-            scheduler: queueJob
-        })
+            if (!vnode.isMounted) {
+                /**
+                 * 初次挂载：
+                 * 1. 调用 patch 函数第一个参数为 null
+                 * 2. 重点：将组件实例的 isMounted 设置为 true，如此更新时不会挂载
+                 */
+                patch(null, subTree, container, anchor)
+                instance.isMounted = true
+            } else {
+                /**
+                 * 非初次挂载：
+                 * 1. 组件已经被挂载，只需要完成自更新
+                 * 2. 使用新的子树与上一次渲染的子树进行打补丁操作
+                 */
+                patch(instance.subTree, subTree, container, anchor)
+            }
+            // 更新组件实例的子树
+            instance.subTree = subTree
+        }, { scheduler: queueJob })
     }
 
     // 任务缓存队列，用 Set 数据结果自动去重功能
