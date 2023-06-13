@@ -4,20 +4,20 @@
 - 框架跨平台能力的关键
 
 ## @vue/reactivity 包
- - 提供响应式 API
- - 暴露全局 API 名为 Vuereactivity
+ - 提供响应式 `API`
+ - 暴露全局 `API` 名为 `Vuereactivity`
 
 
-## 渲染器的基本概念
+## 一、渲染器的基本概念
 
-- **渲染器** renderer
-- 渲染 render
-> 渲染器的作用：把虚拟 DOM 渲染为特定平台上的真实元素。
-> - 浏览器平台：虚拟 DOM ---> 真实 DOM 元素
+- 渲染器 `renderer` 
+  
+    作用：将虚拟 `DOM` 渲染（`render`）为特定平台上的真实元素，如浏览器平台即为真实 `DOM`
 
-- **虚拟 DOM**：virtual DOM 简写 vdom
-- 虚拟节点：virtual node 简写 vnode
-> 虚拟 DOM 和真实 DOM：结构一样 ===> 树形结构
+- 虚拟 DOM：`virtual DOM` 简写 `vdom`
+- 虚拟节点：`virtual node` 简写 `vnode`
+
+虚拟 `DOM` 和真实 `DOM` 的结构一样：*树形结构*
 ```js
 const vnode = {
     type: 'div',    // 元素类型
@@ -33,13 +33,15 @@ const vnode = {
 ```
 
 
-- **挂载 mount**：渲染器把虚拟 DOM 节点渲染为真实 DOM 节点的过程。
-> Vue.js 组件中的 mounted 钩子函数，会在挂载完成时触发。所以 mounted 钩子中可以访问真实的 DOM 元素。
+- 挂载 mount：渲染器把虚拟 `DOM` 节点渲染为真实 `DOM` 节点的**过程**。
 
-- **挂载点 container**
-> 渲染器需要一个挂载点参数，用于指定具体的挂载位置。*挂载点*就是一个 DOM 元素，作为*容器元素*，渲染器会把内容渲染到其中。
+    `Vue.js` 组件中的 `mounted` 钩子函数，会在挂载完成时触发。所以 `mounted` 钩子中可以访问***真实的 `DOM` 元素***。
 
-## 创建渲染器
+- 挂载点 `container`
+
+    渲染器需要一个挂载点参数，用于指定具体的挂载位置。*挂载点*就是一个 `DOM` 元素，作为*容器元素*，渲染器会把内容渲染到其中。
+
+## 二、创建渲染器
 ```js
 function createRenderer(options) {
     // 独立于平台的配置项
@@ -122,10 +124,10 @@ function shouldSetAsProps(el, key, value) {
 }
 ```
 
-## 渲染器的作用
-### 1. **渲染 render**
+## 三、渲染器的作用
+### 1、渲染 `render`
     
-`render` 函数：将虚拟节点渲染为真实的元素。（浏览器平台是渲染为真实的 DOM 元素）
+`render` 函数：将虚拟节点渲染为真实的元素。（浏览器平台是渲染为真实的 `DOM` 元素）
 
 ```javascript
 function render(vnode, container) {
@@ -140,7 +142,7 @@ function render(vnode, container) {
 }
 ```
 
-`patch` 函数：新旧 vnode 都存在时，进行打补丁（更新）操作。其中承载最重要的渲染逻辑。
+`patch` 函数：新旧 `vnode` 都存在时，进行打补丁（更新）操作。其中承载最重要的渲染逻辑。
 
 - 如果新旧节点描述的内容不一样，即 `vnode.type` 属性值不同，则需要卸载旧节点，挂载新节点。注意，卸载旧节点后，要重置旧节点为 `null` 保证后续挂载正确执行。
 
@@ -240,6 +242,12 @@ function unmount(vnode) {
     }
 }
 ```
+
+
+### 2、激活 hydrate
+
+详情请查看最后一章，*同构渲染*
+
 
 # 第八章 挂载和更新
 ## 挂载
@@ -528,8 +536,3 @@ function patchChildren(n1, n2, container) {
     }
 }
 ```
-
-
-### 2. **激活 hydrate**
-
-详情请查看最后一章，*同构渲染*
