@@ -9,7 +9,7 @@
  * 组件接口：
  * 1. 渲染函数 render 其返回值必须是虚拟 DOM（必须）
  * 2. 自身的状态：data 函数来定义（同时在渲染函数中，可以通过 this 访问该函数返回的状态数据）
- * 3. 接受的数据：通过props 显式地指定组件接受哪些 props 数据
+ * 3. 接受的数据：通过props 显式地指定组件接受哪些 props 数据（同时在渲染函数中，可以通过 this 访问该函数的 props 数据）
  *    - vnode.props 是为组件传递的 props 数据
  *    - MyComponent.props 是组件选项中定义的 props 选项
  *
@@ -22,7 +22,17 @@
  * 2. 本质上：是一个状态集合（一个对象）
  * 
  * props 数据：本质上是父组件的数据，当 props发生变化时，会触发父组件重新渲染
- * 子组件的被动更新：由父组件自更新引起的子组件的更新
+ * 1. 子组件的被动更新：由父组件自更新引起的子组件的更新
+ * 2. 渲染函数中可通过 this 访问 props 数据 ===> 封装一个上下文对象
+ * 
+ * 【渲染上下文对象】
+ * 1. 本质上是组件实例 instance 的代理
+ *  - 作用：拦截数据状态的读取和设置操作
+ *  - this 指向：作为渲染函数和生命周期钩子的 this 值
+ * 2. 读取顺序：
+ *  - 优先从自身状态中进行读写
+ *  - props 不可进行写操作
+ * 3. 完整的组件包括：组件自身的数据、props 数据、methods、computed 等选项中定义的数据和方法，这些内容都应该在渲染上下文对象中处理
  */
 import { effect, reactive } from '@vue/reactivity'
 
@@ -395,24 +405,55 @@ function createRenderer(options) {
         // 将组件实例设置到 vnode 上，用于后续更新
         vnode.component = instance
 
+        /**
+         * 渲染上下文对象：
+         * 1. 本质上是组件实例的代理，拦截数据状态的读取和设置操作
+         * 2. 当渲染函数或生命周期钩子中通过 this 来读取数据时：
+         *  - 优先从组建的自身状态中读取，如果没有则再从 props 数据中读取
+         *  - 渲染上下文对象 renderContext 作为渲染函数和生命周期钩子的 this 值
+         * 3. 还应该包括 methods、computed 等选项中定义的数据和方法
+         */
+        const renderContext = new Proxy(instace, {
+            get(t, k, r) {
+                const { state, props } = t
+                if (state && k in state) {
+                    return state[k]
+                } else if (props && k in props) {
+                    return props[k]
+                } else {
+                    console.error('不存在')
+                }
+            },
+            set(t, k, v, r) {
+                const { state, props } = t
+                if (state && k in state) {
+                    state[k] = v
+                } else if (k in props) {
+                    console.warn(`Attempting to mutate prop "${k}". Props are readonly.`)
+                } else {
+                    console.error('不存在')
+                }
+            }
+        })
+
         // 生命周期函数 created 调用
-        created && created(state)
+        created && created(renderContext)
 
         effect(() => {
-            const subTree = render.call(state, state)
+            const subTree = render.call(renderContext, renderContext)
             if (!vnode.isMounted) {
                 // 生命周期函数 beforeMount 调用
-                beforeMount && beforeMount().call(state)
+                beforeMount && beforeMount().call(renderContext)
                 patch(null, subTree, container, anchor)
                 instance.isMounted = true
                 // 生命周期函数 mounted 调用
-                mounted && mounted().call(state)
+                mounted && mounted().call(renderContext)
             } else {
                 // 生命周期函数 beforeUpdate 调用
-                beforeUpdate && beforeUpdate().call(state)
+                beforeUpdate && beforeUpdate().call(renderContext)
                 patch(instance.subTree, subTree, container, anchor)
                 // 生命周期函数 updated 调用
-                updated && updated().call(state)
+                updated && updated().call(renderContext)
             }
             // 更新组件实例的子树
             instance.subTree = subTree
