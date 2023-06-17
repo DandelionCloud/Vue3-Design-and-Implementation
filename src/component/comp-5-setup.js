@@ -1,6 +1,6 @@
 /**
  * 第 12 章 组件的实现原理
- * [12.4 props 与组件的被动更新]
+ * [12.5 setup 函数的作用与实现]
  * 
  * 有状态组件：
  * - 从用户角度来看，就是一个选项对象
@@ -9,7 +9,7 @@
  * 组件接口：
  * 1. 渲染函数 render 其返回值必须是虚拟 DOM（必须）
  * 2. 自身的状态：data 函数来定义（同时在渲染函数中，可以通过 this 访问该函数返回的状态数据）
- * 3. 接受的数据：通过props 显式地指定组件接受哪些 props 数据
+ * 3. 接受的数据：通过props 显式地指定组件接受哪些 props 数据（同时在渲染函数中，可以通过 this 访问该函数的 props 数据）
  *    - vnode.props 是为组件传递的 props 数据
  *    - MyComponent.props 是组件选项中定义的 props 选项
  *
@@ -22,9 +22,33 @@
  * 2. 本质上：是一个状态集合（一个对象）
  * 
  * props 数据：本质上是父组件的数据，当 props发生变化时，会触发父组件重新渲染
- * 子组件的被动更新：由父组件自更新引起的子组件的更新
+ * 1. 子组件的被动更新：由父组件自更新引起的子组件的更新
+ * 2. 渲染函数中可通过 this 访问 props 数据 ===> 封装一个上下文对象
+ * 
+ * 【渲染上下文对象】
+ * 1. 本质上是组件实例 instance 的代理
+ *  - 作用：拦截数据状态的读取和设置操作
+ *  - this 指向：作为渲染函数和生命周期钩子的 this 值
+ * 2. 读取顺序：
+ *  - 优先从自身状态中进行读写
+ *  - props 不可进行写操作
+ * 3. 完整的组件包括：组件自身的数据、props 数据、methods、computed 等选项中定义的数据和方法，这些内容都应该在渲染上下文对象中处理
+ * 
+ * 【setup 函数】
+ * 1. 主要用于配合组合式API，为用户提供一个地方来建立组合逻辑、创建响应式数据、创建通用函数、注册声明周期钩子等能力。
+ * 2. 在组件的整个生命周期中，setup 函数只会在挂载时执行一次。
+ * 3. 返回值情况：
+ *  - 函数，将作为组件的 render 函数
+ *  - 对象，包含的数据将要暴露给模板使用
+ * 4. 接收两个参数：
+ *  - 第一个参数：外部为组件传递的 props 数据对象
+ *  - 第二个参数：setupContext 对象，其中包含与组件接口相关的数据和方法：
+ *      - slots：组件接收到的插槽
+ *      - emit：一个函数，用来发射自定义事件
+ *      - attrs：为组件传递的，没有在组件显式声明为 props 的属性
+ *      - expose：一个函数，用来显式地对外暴露组件数据
  */
-import { effect, reactive, shallowReactive } from '@vue/reactivity'
+import { effect, reactive, shallowReactive, shallowReadonly } from '@vue/reactivity'
 
 // createRender 函数，用来创建一个渲染器，其中 options 参数是独立于平台的 API 配置项
 function createRenderer(options) {
@@ -380,11 +404,11 @@ function createRenderer(options) {
     function mountComponent(vnode, container, anchor) {
         const componentOptions = vnode.type
         // 从组件选项对象中取得组件的生命周期函数
-        const { render, data, beforeCreate, created, beforeMount, mounted, beforeUpdate, updated, props: propsOption } = componentOptions
+        let { render, data, beforeCreate, created, beforeMount, mounted, beforeUpdate, updated, props: propsOption, setup } = componentOptions
         // 生命周期函数 beforeCreate 调用
         beforeCreate && beforeCreate()
 
-        const state = reactive(data())
+        const state = data ? reactive(data()) : null
         const [props, attrs] = resolveProps(propsOption, vnode.props)
         const instance = {
             state,
@@ -393,27 +417,86 @@ function createRenderer(options) {
             isMounted: false,
             subTree: null
         }
+
+        /**
+         * setup 函数的最小实现：
+         * 1. setupContext 暂时只有 attrs
+         * 2. setup 函数的第一个参数：只读版本的 props，避免用户意外修改 props 的值
+         * 3. 判断返回值 setupResult 类型：
+         *   - 函数 ===> 将其作为渲染函数 render
+         *   - 否则 ===> 将作为数据状态赋值给 setupState
+         * 4. 渲染上下文对象中，增加 setupState 的支持
+         */
+        const setupContext = { attrs }
+        const setupResult = setup(shallowReadonly(instance.props), setupContext)
+        // setupState 用来存储由 setup 函数返回的数据
+        let setupState = null
+        if (typeof setupResult === 'function') {
+            if (render) {
+                console.error('setup 函数返回渲染函数，render选项将被忽略')
+            }
+            render = setupResult
+        } else {
+            setupState = setupResult
+        }
+
         // 将组件实例设置到 vnode 上，用于后续更新
         vnode.component = instance
 
+        /**
+         * 渲染上下文对象：
+         * 1. 本质上是组件实例的代理，拦截数据状态的读取和设置操作
+         * 2. 当渲染函数或生命周期钩子中通过 this 来读取数据时：
+         *  - 优先从组建的自身状态中读取，如果没有则再从 props 数据中读取，最后从 setupState 中读取
+         *  - 渲染上下文对象 renderContext 作为渲染函数和生命周期钩子的 this 值
+         * 3. 还应该包括 methods、computed 等选项中定义的数据和方法
+         */
+        const renderContext = new Proxy(instance, {
+            get(t, k, r) {
+                const { state, props } = t
+                if (state && k in state) {
+                    return state[k]
+                } else if (props && k in props) {
+                    return props[k]
+                } else if (setupState && k in setupState) {
+                    return setupState[k]
+                }
+                else {
+                    console.error('不存在')
+                }
+            },
+            set(t, k, v, r) {
+                const { state, props } = t
+                if (state && k in state) {
+                    state[k] = v
+                } else if (k in props) {
+                    console.warn(`Attempting to mutate prop "${k}". Props are readonly.`)
+                } else if (setupState && k in setupState) {
+                    setupState[k] = v
+                } else {
+                    console.error('不存在')
+                }
+            }
+        })
+
         // 生命周期函数 created 调用
-        created && created(state)
+        created && created(renderContext)
 
         effect(() => {
-            const subTree = render.call(state, state)
+            const subTree = render.call(renderContext, renderContext)
             if (!vnode.isMounted) {
                 // 生命周期函数 beforeMount 调用
-                beforeMount && beforeMount().call(state)
+                beforeMount && beforeMount().call(renderContext)
                 patch(null, subTree, container, anchor)
                 instance.isMounted = true
                 // 生命周期函数 mounted 调用
-                mounted && mounted().call(state)
+                mounted && mounted().call(renderContext)
             } else {
                 // 生命周期函数 beforeUpdate 调用
-                beforeUpdate && beforeUpdate().call(state)
+                beforeUpdate && beforeUpdate().call(renderContext)
                 patch(instance.subTree, subTree, container, anchor)
                 // 生命周期函数 updated 调用
-                updated && updated().call(state)
+                updated && updated().call(renderContext)
             }
             // 更新组件实例的子树
             instance.subTree = subTree
@@ -681,29 +764,48 @@ const renderer = createRenderer({
  * 1. 必须的接口：渲染函数，其返回值必须是虚拟 DOM
  * 2. 自身的状态：data 函数来定义（同时在渲染函数中，可以通过 this 访问该函数返回的状态数据）
  * 3. 通过 props 显式地指定组件会接受哪些 props 数据
+ * 4. setup 函数
  */
-const MyComponent = {
-    name: 'MyComponent',
-    // 接收 props
-    props: {
-        title: String
-    },
-    // 定义组件自身的状态
-    data() {
-        return { foo: 1 }
-    },
-    // 渲染函数
-    render() {
+// const MyComponent = {
+//     setup() {
+//         return () => {
+//             return {
+//                 type: 'div', children: 'this is a child'
+//             }
+//         }
+//     }
+// }
+// // 该 vnode 用来描述组件，type 属性存储组件的选项对象
+// const CompVNode = {
+//     type: MyComponent
+//     // ...
+// }
+// // 调用渲染器来渲染组件
+// renderer.render(CompVNode, document.querySelector('#app'))
+
+// const MyComponent2 = {
+//     setup() {
+//         return {
+//             count: 1,
+//             title: 'this is a setup title'
+//         }
+//     },
+//     render() {
+//         return { type: 'div', children: `${this.title}, ${this.count}` }
+//     }
+// }
+// renderer.render({ type: MyComponent2 }, document.querySelector('#app'))
+
+const MyComponent3 = {
+    props: { title: String },
+    setup(props) {
         return {
-            type: 'div',
-            children: `foo 的值是：${this.foo}`
+            count: 1,
+            title: props.title
         }
+    },
+    render() {
+        return { type: 'div', children: `${this.title}, ${this.count}` }
     }
 }
-// 该 vnode 用来描述组件，type 属性存储组件的选项对象
-const CompVNode = {
-    type: MyComponent
-    // ...
-}
-// 调用渲染器来渲染组件
-renderer.render(CompVNode, document.querySelector('#app'))
+renderer.render({ type: MyComponent3, props: { title: 'this is a props title' } }, document.querySelector('#app'))

@@ -34,7 +34,7 @@
  *  - props 不可进行写操作
  * 3. 完整的组件包括：组件自身的数据、props 数据、methods、computed 等选项中定义的数据和方法，这些内容都应该在渲染上下文对象中处理
  */
-import { effect, reactive } from '@vue/reactivity'
+import { effect, reactive, shallowReactive } from '@vue/reactivity'
 
 // createRender 函数，用来创建一个渲染器，其中 options 参数是独立于平台的 API 配置项
 function createRenderer(options) {
@@ -49,6 +49,7 @@ function createRenderer(options) {
 
     const Text = Symbol()   // 文本节点的 type 标识
     const Comment = Symbol()    // 注释节点的 type 标识
+    const Fragment = Symbol()
 
     // 挂载节点
     function render(vnode, container) {
@@ -413,7 +414,7 @@ function createRenderer(options) {
          *  - 渲染上下文对象 renderContext 作为渲染函数和生命周期钩子的 this 值
          * 3. 还应该包括 methods、computed 等选项中定义的数据和方法
          */
-        const renderContext = new Proxy(instace, {
+        const renderContext = new Proxy(instance, {
             get(t, k, r) {
                 const { state, props } = t
                 if (state && k in state) {
@@ -742,7 +743,10 @@ const MyComponent = {
 }
 // 该 vnode 用来描述组件，type 属性存储组件的选项对象
 const CompVNode = {
-    type: MyComponent
+    type: MyComponent,
+    props:{
+        title: 'this is a title'
+    }
     // ...
 }
 // 调用渲染器来渲染组件
