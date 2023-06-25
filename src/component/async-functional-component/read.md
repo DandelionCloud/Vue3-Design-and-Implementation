@@ -135,6 +135,33 @@ return () => {
 }
 ```
 
+同时，为了方便用户实现更细粒度的控制，我们可以将加载错误作为 `Error` 组件的 `props` 传递给用户自定义的 `errorComponent`，代码实现如下：
+```js
+// 主要代码仍在 setup 函数中
+// 定义 error，当错误发生时，用来存储错误对象
+const error = shallowRef(null)
+
+// 为 loader 函数增加 catch 语句，捕获加载过程中的错误
+loader().then(
+    // ...
+).catch( err => error.value = err )
+```
+
+因为也可能是加载超时产生错误，所以在定时器 `timer` 中，增加错误生成，并赋值给 `error.value` 的操作：
+```js
+timer = setTimeout(()=>{
+    // ...
+    const error = new Error(`Async component timed out after ${options.timeout}ms.`)
+})
+```
+
+最后，在满足返回 Error 组件的情况下，为 `Error` 组件增加 `props`：
+```js
+else if (timeout.value && options.errorComponent) {
+    return { type: errorComponent, props: { error: error.value } }
+}
+```
+
 # 函数式组件
 
 ```tip  
