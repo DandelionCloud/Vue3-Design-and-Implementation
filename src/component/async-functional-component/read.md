@@ -162,6 +162,107 @@ else if (timeout.value && options.errorComponent) {
 }
 ```
 
+3、提供延迟加载 Loading 组件的能力
+
+首先设计用户接口，如下：
+```js
+const AsyncComp = defineAsyncComponent({
+    loader: () => import('App.veu'),    //  加载器  
+    delay: 200,
+    loadingComponent: {
+        setup() {
+            return () => {
+                return { type: 'h2', children: 'loading...' }
+            }
+        }
+    }
+})
+```
+
+此时需要为 `defineAsyncComponent` 函数的 `options` 选项参数增加 `delay` 和 `loadingComponent` 属性字段，主要实现如下：
+```js
+// 核心代码在 setup 函数中
+// 增加 loading 标识，代表是否正在加载，默认 false 
+const loading = ref(false)
+// 增加用于延迟的计时器 loadingTimer
+const loadingTimer = null
+// 如果用户配置了 delay 参数，则开启定时器，到延迟时间后修改 loading 标识
+if (options.delay) {
+    loadingTimer = setTimeout(() => {
+        loading.value = true
+    }, options.delay)
+}
+// 如果配置项中没有指定 delay，则直接标记 loading.value 为 true
+else {
+    loading.value = true
+}
+// 为 loader 函数增加 finally 语句，用户处理结束时的操作
+loader.then(
+    // ...
+).catch(
+    // ...
+).finally(()=>{
+    // 加载完成后，不论是否成功都要清除定时器，且重置 loading.value 为 false
+    loading.value = false
+    clearTimeout(loadingTimer)
+})
+// ...
+// 增加返回的判断：如果正在加载且用户指定了 loading 组件，则渲染 loading 组件
+else if (loading.value && options.loadingComponent) {
+    return { type: options.loadingComponent }
+}
+```
+
+注意：当异步组件加载完成后，会卸载 `Loading` 组件并渲染异步加载的组件。因此需要 `unmount` 函数支持组件的卸载，如下：
+```js
+
+function unmount(vnode) {
+    // ...
+    else if(typeof vnode.type === 'object') {
+        unmount(vnode.component.subTree)
+        return
+    }
+    // ...
+}
+```
+
+4、重试能力
+异步组件加载失败的重试机制，与请求服务端接口失败后的重试一样。现模拟接口请求失败的情况，如下
+```js
+// 封装一个 fetch 函数
+function fetch(){
+    return new Promise((resolve, reject) => {
+        // 1 秒后失败
+        setTimeout(() => {
+            reject('err')
+        }, 1000)
+    })
+}
+
+// 封装一个 load 函数来请求 fetch，接收一个 onError 回调
+function load(onError) {
+    const p = fetch()
+    // 捕获错误，当错误发生时返回一个 promise 实例，并调用 onError 回调
+    return p.catch(err => {
+        return new Promise((resolve, reject) => {
+            const retry = () => resolve(load(onError))
+            const fail = () => reject(err)
+            // 将重试函数 retry 作为参数传递给 onError 函数
+            onError(retry, fail)
+        })
+    })
+}
+
+// 用户使用时，重试
+load((retry, fail) => {
+    // 回调中调用重试函数
+    retry()
+}).then(res=>{
+    // 成功
+    console.log(res)
+})
+```
+
 # 函数式组件
 
 ```tip  
