@@ -263,6 +263,158 @@ load((retry, fail) => {
 })
 ```
 
+接下来我们整合到异步组件的加载流程中，代码如下：
+```js
+// 记录重试次数
+let retries = 0
+// 封装一个 load 函数，用来加载异步组件
+function load(){
+    return loader()
+    // 捕获加载器的错误
+    .catch(err=>{
+        if(options.onError) {
+            // 如果用户指定了 onError 回调，将控制权交给用户
+            // 返回一个新的 promise 实例
+            return new Promise((resolve, reject) => {
+                const retry = () => {
+                    resolve(load())
+                    retries++
+                }
+                const fail = () => reject(err)
+                // 将重试函数，失败函数，以及重试次数作为参数传给 onError 回调
+                options.onError(retry, fail, retries)
+            })
+        } else {
+            throw error
+        }
+    })
+}
+// ...
+// setup 中调用 load 函数，而不是加载器
+load().then(
+    // ...
+).catch(
+    // ...
+).finally(
+    // ...
+)
+```
+
+最后，代码整合：
+```js
+function defineAsyncComponent(options){
+    // 如果 options 是加载器，格式化为配置项形式
+    if(typeof options === 'function') {
+        options = {
+            loader: options
+        }
+    }
+    const { loader } = options
+    let InnerComp = null
+
+    // 重试次数
+    let retries = 0
+    // 封装 load 函数，用来加载异步组件，并提供加载失败后的重试能力
+    function load() {
+        return loader().catch(err => {
+            if(options.onError) {
+                return new Promise((resolve, reject) => {
+                    const retry = () => {
+                        resolve(load())
+                        retries++
+                    }
+                    const fail = () => reject(err)
+                    options.onError(retry, fail, retries)
+                })
+            } else {
+                throw error
+            }
+        })
+    }
+
+    return {
+        name: "AsyncComponentWrapper",
+        setup() {
+            // 是否加载成功
+            const loaded = ref(false)
+            // 是否超时，默认 false
+            const timeout = ref(false)
+            // 加载错误后，存储错误对象
+            const error = shallowRef(null)
+            // 是否正在加载
+            const loading = ref(false)
+
+            let loadingTimer = null
+            // 如果用户指定了延迟时间，开始 loading 的延迟定时器
+            if(options.delay) {
+                loadingTimer = setTimeout(() => {
+                    // 到达指定延迟时间后，标记 loading
+                    loading.value = true
+                }, options.delay)
+            } 
+            // 如果用户没有指定延迟时间，则直接标记 loading
+            else {
+                loading.value = true
+            }
+
+            // 调用 load 函数加载异步组件
+            load()
+                // 加载成功
+                .then(c => {
+                    InnerComp = c
+                    loaded.value = true
+                })
+                // 加载失败
+                .catch(err => {
+                    error.value = err
+                })
+                // 清理 loading 组件的延时定时器
+                .finally(() => {
+                    loading.value = false
+                    clearTimeout(loadingTimer)
+                })
+
+            // 加载超时
+            let timer = null
+            // 如果用户指定了超时时长，则开始超时定时器
+            if(options.timeout) {
+                timer = setTimeout(() => {
+                    // 到达指定超时时长后，标记为超时
+                    timeout.value = true
+                    // 加载超时后，创建一个错误对象，将错误信息传递给 errorComponent 组件
+                    error.value = new Error(`Async component timed out after ${options.timeout}ms.`)
+                }, options.timeout)
+            }
+
+            // 包装组件卸载时，要清理加载超时的定时器
+            onUnmounted(() => clearTimeout(timer))
+
+            // 占位符
+            const placeholder = { type: Text, children: ''}
+
+            return () => {
+                // 成功
+                if(loaded.value) {
+                    return { type: InnerComp }
+                }
+                // 失败（超时）
+                else if(timeout.value && options.errorComponent) {
+                    return { type: errorComponent, props: { error: error.value }}
+                }
+                // 延迟 loading 组件
+                else if(loading.value && options.loadingComponent) {
+                    return { type: options.loadingComponent }
+                }
+                // 默认
+                else {
+                    return placeholder
+                }
+            }
+        }
+    }
+}
+```
+
 # 函数式组件
 
 ```tip  

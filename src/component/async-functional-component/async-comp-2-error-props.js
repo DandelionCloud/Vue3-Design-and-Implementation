@@ -63,7 +63,7 @@ function defineAsyncComponent(options) {
                 }, options.timeout)
             }
             // 包装组件卸载时要清除定时器
-            onUnmounted(() => cleartTimeout(timer))
+            onUnmounted(() => clearTimeout(timer))
 
             const placeholder = { type: Text, children: '' }
 

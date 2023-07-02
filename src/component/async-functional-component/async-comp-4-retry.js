@@ -102,7 +102,7 @@ function defineAsyncComponent(options) {
                 .catch(err => error.value = err)
                 // 增加 finally 语句
                 .finally(() => {
-                    loading.vlaue = false
+                    loading.value = false
                     // 论加载成功与否都要清除延迟定时器
                     clearTimeout(loadingTimer)
                 })
@@ -118,7 +118,7 @@ function defineAsyncComponent(options) {
                 }, options.timeout)
             }
             // 包装组件卸载时要清除定时器
-            onUnmounted(() => cleartTimeout(timer))
+            onUnmounted(() => clearTimeout(timer))
 
             const placeholder = { type: Text, children: '' }
 
