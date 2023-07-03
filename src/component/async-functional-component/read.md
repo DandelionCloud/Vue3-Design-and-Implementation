@@ -422,5 +422,5 @@ function defineAsyncComponent(options){
 
 特点：无状态、编写简单且直观
 
-注意：Vue.js3中使用函数组件是因为它的简单性，而非性能更好.
+注意：Vue.js3中使用函数组件是因为它的简单性，而非性能更好
 ```
