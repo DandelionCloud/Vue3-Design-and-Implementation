@@ -421,4 +421,6 @@ function defineAsyncComponent(options){
 使用一个普通函数定义组件，其返回值就是组件要渲染的内容。
 
 特点：无状态、编写简单且直观
+
+注意：Vue.js3中使用函数组件是因为它的简单性，而非性能。
 ```
