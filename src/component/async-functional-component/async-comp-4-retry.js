@@ -1,6 +1,6 @@
 /**
  * 第 13 章 异步组件与函数式组件
- * [13.2 异步组件的实现原理] - 超时与 Error 组件
+ * [13.2 异步组件的实现原理] - 重试机制
  * 具有的能力：
  * 1. 指定 ErrorComponent
  * 2. 指定 Loading 组件，及 delay
@@ -22,6 +22,10 @@
  * 注意：当异步组件加载完成后，会卸载 Loading 组件，因此需要 unmount 函数支持卸载组件
  *  - 增加 typeof vnode.type === 'object' 的判断
  *  - 符合判断时，卸载组件渲染的内容即 subTree ===> 调用 unmount(vnode.component.subTree)
+ * 
+ * 重试机制：
+ * 1. 重试，即当加载出错时，有能力重新发起加载组件的请求。
+ * 2. 异步组件加载失败后的重试机制，与请求服务端接口失败后的重试机制一样。
  */
 
 const { onUnmounted } = require('vue')
@@ -40,6 +44,32 @@ function defineAsyncComponent(options) {
     }
     const { loader } = options
     let innerComp = null
+
+    // 记录重试次数
+    let retries = 0
+    /**
+     * 封装 load 函数来加载异步组件
+     * 1. 捕获加载器错误
+     * 2. 如果用户指定了 onError 回调，将控制权交给用户
+     */
+    function load() {
+        return loader().catch(err => {
+            if (options.onError) {
+                return new Promise((resolve, reject) => {
+                    // 重试
+                    const retry = () => {
+                        resolve(load())
+                        retries++
+                    }
+                    // 失败 
+                    const fail = () => reject(err)
+                    options.onError(retry, fail, retries)
+                })
+            } else {
+                throw errro
+            }
+        })
+    }
 
     return {
         name: 'AsyncComponentWrapper',
@@ -62,7 +92,8 @@ function defineAsyncComponent(options) {
                 loading.value = true
             }
 
-            loader()
+            // 调用 load 函数加载组件
+            load()
                 .then(c => {
                     innerComp = c
                     loaded.value = true
@@ -71,7 +102,7 @@ function defineAsyncComponent(options) {
                 .catch(err => error.value = err)
                 // 增加 finally 语句
                 .finally(() => {
-                    loading.vlaue = false
+                    loading.value = false
                     // 论加载成功与否都要清除延迟定时器
                     clearTimeout(loadingTimer)
                 })
@@ -134,4 +165,41 @@ const AsyncComp = defineAsyncComponent({
             }
         }
     }
+})
+
+/**
+ * 模拟：请求服务端接口失败后的重试
+ */
+// 模拟接口请求失败
+function fetch() {
+    return new Promise((resolve, reject) => {
+        setTimeout(() => {
+            reject("err")
+        }, 1000)
+    })
+}
+
+///////////////// 存在疑问！！！ ///////////////
+// 封装 load，实现失败后的重试
+function load(onError) {
+    // 请求接口获得 promise 实例
+    const p = fetch()
+    // 捕获错误，当错误发生时，返回一个新的 promise 实例，并调用 onError 回调
+    return p.catch(err => {
+        return new Promise((resolve, reject) => {
+            // retry 函数，用来重试
+            const retry = () => resolve(load(onError))
+            const fail = () => reject(err)
+            onError(retry, fail)
+        })
+    })
+}
+
+// 调用 load 函数加载资源
+load((retry, fail) => {
+    // 失败后重试
+    retry()
+}).then(res => {
+    // 成功
+    console.log(res)
 })
