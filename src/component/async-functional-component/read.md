@@ -162,7 +162,7 @@ else if (timeout.value && options.errorComponent) {
 }
 ```
 
-3、提供延迟加载 Loading 组件的能力
+### 3、提供延迟加载 Loading 组件的能力
 
 首先设计用户接口，如下：
 ```js
@@ -226,7 +226,7 @@ function unmount(vnode) {
 }
 ```
 
-4、重试能力
+### 4、重试能力
 异步组件加载失败的重试机制，与请求服务端接口失败后的重试一样。现模拟接口请求失败的情况，如下
 ```js
 // 封装一个 fetch 函数
@@ -420,7 +420,42 @@ function defineAsyncComponent(options){
 ```tip  
 使用一个普通函数定义组件，其返回值就是组件要渲染的内容。
 
-特点：无状态、编写简单且直观
+特点：无状态、编写简单且直观、无生命周期
 
-注意：Vue.js3中使用函数组件是因为它的简单性，而非性能
+注意：Vue.js3中使用函数组件是因为它的简单性，而非性能。
+
+```
+
+### 1、函数式组件的实现
+
+函数式组件与有状态组件类似，其挂载可复用 `mountComponent` 函数，为了支持函数式组件的更新，我们需要在 `patch` 函数中，增加对于它的判断：
+```js
+function patch(n1, n2, container, anchor) {
+    // ...
+    // 有状态组件和函数式组件
+    else if(typeof type === 'object' || typeof type === 'function') {
+        if (!n1) {
+            mountComponent(n2, container, anchor)
+        } else {
+            patchComponent(n1, n2, anchor)
+        }
+    }
+}
+```
+
+其中，挂载函数式组件时，要增加是否为函数的判断：
+```js
+function mountComponent(vnode, container, anchor) {
+    // 判断是否为函数式组件
+    const isFunctional = typeof vnode.type === 'function'
+    const componentOptions = vnode.type
+    // 如果是函数式组件，重置其组件选项
+    if(isFunctional) {
+        componentOptions = {
+            render: vnode.type,
+            props: vnode.type.props
+        }
+    }
+    // ...
+}
 ```
